@@ -242,10 +242,10 @@ static void uninit(struct ao *ao)
     alSourcei(source, AL_BUFFER, 0);
 
     alDeleteBuffers(NUM_BUF, buffers);
+    alDeleteSources(1, &source);
 
     ALCcontext *ctx = alcGetCurrentContext();
     ALCdevice *dev = alcGetContextsDevice(ctx);
-    reset(ao);
     alcMakeContextCurrent(NULL);
     alcDestroyContext(ctx);
     alcCloseDevice(dev);
