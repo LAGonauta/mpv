@@ -113,18 +113,160 @@ static const struct speaker speaker_pos[] = {
     {-1},
 };
 
-static ALenum get_al_format(int format)
+static enum af_format get_af_format(int format)
 {
     switch (format) {
-    case AF_FORMAT_U8P: return AL_FORMAT_MONO8;
-    case AF_FORMAT_S16P: return  AL_FORMAT_MONO16;
-    case AF_FORMAT_FLOATP:
-        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE)
-            return AL_FORMAT_MONO_FLOAT32;
+    case AF_FORMAT_U8:
+        if (alGetEnumValue("AL_FORMAT_MONO8"))
+            return AL_TRUE;
         break;
-    case AF_FORMAT_DOUBLEP:
+
+    case AF_FORMAT_S16:
+        if (alGetEnumValue("AL_FORMAT_MONO16"))
+            return AL_TRUE;
+        break;
+
+    case AF_FORMAT_S32:
+        if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL)
+            return AL_TRUE;
+        break;
+
+    case AF_FORMAT_FLOAT:
+        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE)
+            return AL_TRUE;
+        break;
+
+    case AF_FORMAT_DOUBLE:
         if (alIsExtensionPresent((ALchar*)"AL_EXT_double") == AL_TRUE)
-            return AL_FORMAT_MONO_DOUBLE_EXT;
+            return AL_TRUE;
+        break;
+
+    }
+    return AL_FALSE;
+}
+
+static ALenum get_al_format(struct ao *ao, int format)
+{
+    switch (format) {
+    case AF_FORMAT_U8:
+        switch (ao->channels.num) {
+        case 8:
+            if (alGetEnumValue("AL_FORMAT_71CHN8")) {
+                return alGetEnumValue("AL_FORMAT_71CHN8");
+            }
+        case 7:
+            if (alGetEnumValue("AL_FORMAT_61CHN8")) {
+                return alGetEnumValue("AL_FORMAT_61CHN8");
+            }
+        case 6:
+            if (alGetEnumValue("AL_FORMAT_51CHN8")) {
+                return alGetEnumValue("AL_FORMAT_51CHN8");
+            }
+        case 4:
+            if (alGetEnumValue("AL_FORMAT_QUAD8")) {
+                return alGetEnumValue("AL_FORMAT_QUAD8");
+            }
+        case 2:
+            if (alGetEnumValue("AL_FORMAT_STEREO8")) {
+                return alGetEnumValue("AL_FORMAT_STEREO8");
+            }
+        default:
+            return alGetEnumValue("AL_FORMAT_MONO8");
+        }
+        
+    case AF_FORMAT_S16:
+        switch (ao->channels.num) {
+        case 8:
+            if (alGetEnumValue("AL_FORMAT_71CHN16")) {
+                return alGetEnumValue("AL_FORMAT_71CHN16");
+            }
+        case 7:
+            if (alGetEnumValue("AL_FORMAT_61CHN16")) {
+                return alGetEnumValue("AL_FORMAT_61CHN16");
+            }
+        case 6:
+            if (alGetEnumValue("AL_FORMAT_51CHN16")) {
+                return alGetEnumValue("AL_FORMAT_51CHN16");
+            }
+        case 4:
+            if (alGetEnumValue("AL_FORMAT_QUAD16")) {
+                return alGetEnumValue("AL_FORMAT_QUAD16");
+            }
+        case 2:
+            if (alGetEnumValue("AL_FORMAT_STEREO16")) {
+                return alGetEnumValue("AL_FORMAT_STEREO16");
+            }
+        default:
+            return alGetEnumValue("AL_FORMAT_MONO16");
+        }
+
+    case AF_FORMAT_S32:
+        if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL) {
+            switch (ao->channels.num) {
+            case 8:
+              if (alGetEnumValue("AL_FORMAT_71CHN32")) {
+                return alGetEnumValue("AL_FORMAT_71CHN32");
+              }
+              break;
+            case 7:
+              if (alGetEnumValue("AL_FORMAT_61CHN32")) {
+                return alGetEnumValue("AL_FORMAT_61CHN32");
+              }
+              break;
+            case 6:
+              if (alGetEnumValue("AL_FORMAT_51CHN32")) {
+                return alGetEnumValue("AL_FORMAT_51CHN32");
+              }
+              break;
+            case 4:
+              if (alGetEnumValue("AL_FORMAT_QUAD32")) {
+                return alGetEnumValue("AL_FORMAT_QUAD32");
+              }
+              break;
+            case 2:
+              if (alGetEnumValue("AL_FORMAT_STEREO32")) {
+                return alGetEnumValue("AL_FORMAT_STEREO32");
+              }
+            default:
+              return alGetEnumValue("AL_FORMAT_MONO32");
+            }
+        }
+
+    case AF_FORMAT_FLOAT:
+        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
+            switch (ao->channels.num) {
+            case 8:
+              if (alGetEnumValue("AL_FORMAT_71CHN32")) {
+                return alGetEnumValue("AL_FORMAT_71CHN32");
+              }
+              break;
+            case 7:
+              if (alGetEnumValue("AL_FORMAT_61CHN32")) {
+                return alGetEnumValue("AL_FORMAT_61CHN32");
+              }
+              break;
+            case 6:
+              if (alGetEnumValue("AL_FORMAT_51CHN32")) {
+                return alGetEnumValue("AL_FORMAT_51CHN32");
+              }
+              break;
+            case 4:
+              if (alGetEnumValue("AL_FORMAT_QUAD32")) {
+                return alGetEnumValue("AL_FORMAT_QUAD32");
+              }
+            case 2:
+              if (alGetEnumValue("AL_FORMAT_STEREO32")) {
+                return alGetEnumValue("AL_FORMAT_STEREO_FLOAT32");
+              }
+            default:
+              return alGetEnumValue("AL_FORMAT_MONO_FLOAT32");
+            }
+        }
+        break;
+
+    case AF_FORMAT_DOUBLE:
+        if (alIsExtensionPresent((ALchar*)"AL_EXT_double") == AL_TRUE)
+            return alGetEnumValue("AL_FORMAT_MONO_DOUBLE_EXT");
         break;
     }
     return AL_FALSE;
@@ -213,7 +355,7 @@ static int init(struct ao *ao)
     int try_formats[AF_FORMAT_COUNT];
     af_get_best_sample_formats(ao->format, try_formats);
     for (int n = 0; try_formats[n]; n++) {
-        p->al_format = get_al_format(try_formats[n]);
+        p->al_format = get_al_format(ao, try_formats[n]);
         if (p->al_format != AL_FALSE) {
             ao->format = try_formats[n];
             break;
@@ -310,14 +452,12 @@ static int play(struct ao *ao, void **data, int samples, int flags)
     ALint state;
     int num = samples / CHUNK_SAMPLES;
     for (int i = 0; i < num; i++) {
-        for (int ch = 0; ch < ao->channels.num; ch++) {
-            char *d = data[ch];
-            d += i * p->chunk_size;
-            alBufferData(buffers[ch][cur_buf[ch]], p->al_format, d,
-                         p->chunk_size, ao->samplerate);
-            alSourceQueueBuffers(sources[ch], 1, &buffers[ch][cur_buf[ch]]);
-            cur_buf[ch] = (cur_buf[ch] + 1) % NUM_BUF;
-        }
+        int ch = 0;
+        char *d = data[ch];
+        d += i * p->chunk_size * ao->channels.num;
+        alBufferData(buffers[ch][cur_buf[ch]], p->al_format, d, p->chunk_size * ao->channels.num, ao->samplerate);
+        alSourceQueueBuffers(sources[ch], 1, &buffers[ch][cur_buf[ch]]);
+        cur_buf[ch] = (cur_buf[ch] + 1) % NUM_BUF;
     }
     alGetSourcei(sources[0], AL_SOURCE_STATE, &state);
     if (state != AL_PLAYING) // checked here in case of an underrun
