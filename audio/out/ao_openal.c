@@ -76,6 +76,7 @@ static void reset(struct ao *ao);
 
 static int control(struct ao *ao, enum aocontrol cmd, void *arg)
 {
+    ALboolean mute;
     switch (cmd) {
     case AOCONTROL_GET_VOLUME:
     case AOCONTROL_SET_VOLUME: {
@@ -89,6 +90,17 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
         vol->left = vol->right = volume * 100;
         return CONTROL_TRUE;
     }
+    case AOCONTROL_GET_MUTE:
+    case AOCONTROL_SET_MUTE:
+        mute = *(ALboolean *)arg;
+        ALfloat al_mute = (ALfloat)(!mute);
+        if (cmd == AOCONTROL_SET_MUTE) {
+            alSourcef(source, AL_GAIN, al_mute);
+        }
+        alGetSourcef(source, AL_GAIN, &al_mute);
+        *(ALboolean *)arg = !((ALboolean)al_mute);
+        return CONTROL_TRUE;
+
     case AOCONTROL_HAS_SOFT_VOLUME:
         return CONTROL_TRUE;
     }
