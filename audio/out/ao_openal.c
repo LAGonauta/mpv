@@ -231,43 +231,6 @@ static ALenum get_al_format(struct ao *ao, int format)
                 return alGetEnumValue("AL_FORMAT_MONO32");
             }
         }
-
-    case AF_FORMAT_FLOAT:
-        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
-            switch (ao->channels.num) {
-            case 8:
-                if (alGetEnumValue("AL_FORMAT_71CHN32")) {
-                    return alGetEnumValue("AL_FORMAT_71CHN32");
-                }
-                break;
-            case 7:
-                if (alGetEnumValue("AL_FORMAT_61CHN32")) {
-                    return alGetEnumValue("AL_FORMAT_61CHN32");
-                }
-                break;
-            case 6:
-                if (alGetEnumValue("AL_FORMAT_51CHN32")) {
-                    return alGetEnumValue("AL_FORMAT_51CHN32");
-                }
-                break;
-            case 4:
-                if (alGetEnumValue("AL_FORMAT_QUAD32")) {
-                    return alGetEnumValue("AL_FORMAT_QUAD32");
-                }
-            case 2:
-                if (alGetEnumValue("AL_FORMAT_STEREO32")) {
-                    return alGetEnumValue("AL_FORMAT_STEREO_FLOAT32");
-                }
-            default:
-                return alGetEnumValue("AL_FORMAT_MONO_FLOAT32");
-            }
-        }
-        break;
-
-        case AF_FORMAT_DOUBLE:
-            if (alIsExtensionPresent((ALchar*)"AL_EXT_double") == AL_TRUE)
-                return alGetEnumValue("AL_FORMAT_MONO_DOUBLE_EXT");
-            break;
     }
     return AL_FALSE;
 }
