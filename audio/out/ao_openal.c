@@ -133,6 +133,19 @@ static ALenum get_al_format(int format)
 // close audio device
 static void uninit(struct ao *ao)
 {
+    alSourceStopv(ao->channels.num, sources);
+    for (int i = 0; i < ao->channels.num; ++i)
+    {
+       alSourcei(sources[i], AL_BUFFER, 0);
+    }
+
+    alDeleteSources(ao->channels.num, sources);
+
+    for (int ch = 0; ch < ao->channels.num; ++ch)
+    {
+      alDeleteBuffers(NUM_BUF, buffers[ch]);
+    }
+
     ALCcontext *ctx = alcGetCurrentContext();
     ALCdevice *dev = alcGetContextsDevice(ctx);
     reset(ao);
