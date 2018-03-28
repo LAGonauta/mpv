@@ -437,19 +437,26 @@ static int play(struct ao *ao, void **data, int samples, int flags)
 
 static double get_delay(struct ao *ao)
 {
+    ALint queued;
+    unqueue_buffers();
+    alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
+
     double soft_source_latency = 0;
     if(alIsExtensionPresent("AL_SOFT_source_latency")) {
         ALdouble offsets[2];
         LPALGETSOURCEDVSOFT alGetSourcedvSOFT = alGetProcAddress("alGetSourcedvSOFT");
-        alGetSourcedvSOFT(source, AL_SEC_OFFSET_LATENCY_SOFT, offsets);
+        alGetSourcedvSOFT(source, alGetEnumValue("AL_SEC_OFFSET_LATENCY_SOFT"), offsets);
         // Additional latency to the play buffer, the remaining seconds to be
         // played minus the offset (seconds already played)
         soft_source_latency = offsets[1] - offsets[0];
     }
+    else
+    {
+        float offset = 0;
+        alGetSourcef(source, AL_SEC_OFFSET, &offset);
+        soft_source_latency = -offset;
+    }
 
-    ALint queued;
-    unqueue_buffers();
-    alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
     return (queued * CHUNK_SAMPLES / (double)ao->samplerate) + soft_source_latency;
 }
 
