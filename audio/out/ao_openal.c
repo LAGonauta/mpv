@@ -558,7 +558,7 @@ static double get_delay(struct ao *ao)
     if(alIsExtensionPresent("AL_SOFT_source_latency")) {
         ALdouble offsets[2];
         LPALGETSOURCEDVSOFT alGetSourcedvSOFT = alGetProcAddress("alGetSourcedvSOFT");
-        alGetSourcedvSOFT(source, alGetEnumValue("AL_SEC_OFFSET_LATENCY_SOFT"), offsets);
+        alGetSourcedvSOFT(source, AL_SEC_OFFSET_LATENCY_SOFT, offsets);
         // Additional latency to the play buffer, the remaining seconds to be
         // played minus the offset (seconds already played)
         soft_source_latency = offsets[1] - offsets[0];
