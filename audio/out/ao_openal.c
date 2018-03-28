@@ -25,6 +25,7 @@
 #include <stdio.h>
 #include <inttypes.h>
 
+#define AL_ALEXT_PROTOTYPES
 #ifdef __APPLE__
 #ifndef AL_FORMAT_MONO_FLOAT32
 #define AL_FORMAT_MONO_FLOAT32 0x10010
@@ -444,8 +445,7 @@ static double get_delay(struct ao *ao)
     double soft_source_latency = 0;
     if(alIsExtensionPresent("AL_SOFT_source_latency")) {
         ALdouble offsets[2];
-        LPALGETSOURCEDVSOFT alGetSourcedvSOFT = alGetProcAddress("alGetSourcedvSOFT");
-        alGetSourcedvSOFT(source, alGetEnumValue("AL_SEC_OFFSET_LATENCY_SOFT"), offsets);
+        alGetSourcedvSOFT(source, AL_SEC_OFFSET_LATENCY_SOFT, offsets);
         // Additional latency to the play buffer, the remaining seconds to be
         // played minus the offset (seconds already played)
         soft_source_latency = offsets[1] - offsets[0];
