@@ -71,6 +71,7 @@ static struct ao *ao_data;
 struct priv {
     ALenum al_format;
     int chunk_size;
+    int direct_channels;
 };
 
 static void reset(struct ao *ao);
@@ -126,96 +127,106 @@ static const struct speaker speaker_pos[] = {
     {-1},
 };
 
-static enum af_format get_af_format(int format)
+static enum af_format get_supported_format(int format)
 {
     switch (format) {
     case AF_FORMAT_U8:
         if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO8"))
-            return AL_TRUE;
+            return AF_FORMAT_U8;
         break;
 
     case AF_FORMAT_S16:
         if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO16"))
-            return AL_TRUE;
+            return AF_FORMAT_S16;
         break;
 
     case AF_FORMAT_S32:
         if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL)
-            return AL_TRUE;
+            return AF_FORMAT_S32;
         break;
 
     case AF_FORMAT_FLOAT:
         if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE)
-            return AL_TRUE;
+            return AF_FORMAT_FLOAT;
         break;
-
-    case AF_FORMAT_DOUBLE:
-        if (alIsExtensionPresent((ALchar*)"AL_EXT_double") == AL_TRUE)
-            return AL_TRUE;
-        break;
-
     }
     return AL_FALSE;
 }
 
-static ALenum get_al_format(struct ao *ao, int format)
+static ALenum get_supported_layout(int format, int channels)
 {
     switch (format) {
     case AF_FORMAT_U8:
-        switch (ao->channels.num) {
+        switch (channels) {
         case 8:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN8")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN8");
             }
+            break;
         case 7:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN8")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN8");
             }
+            break;
         case 6:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN8")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN8");
             }
+            break;
         case 4:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD8")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD8");
             }
+            break;
         case 2:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO8")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO8");
             }
-        default:
-            return alGetEnumValue((ALchar*)"AL_FORMAT_MONO8");
+            break;
+        case 1:
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO8")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_MONO8");
+            }
+            break;
         }
 
     case AF_FORMAT_S16:
-        switch (ao->channels.num) {
+        switch (channels) {
         case 8:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN16")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN16");
             }
+            break;
         case 7:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN16")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN16");
             }
+            break;
         case 6:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN16")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN16");
             }
+            break;
         case 4:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD16")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD16");
             }
+            break;
         case 2:
             if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO16")) {
                 return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO16");
             }
-        default:
-            return alGetEnumValue((ALchar*)"AL_FORMAT_MONO16");
+            break;
+        case 1:
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO16")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_MONO16");
+            }
+            break;
         }
 
     case AF_FORMAT_S32:
         if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL) {
-            switch (ao->channels.num) {
+            switch (channels) {
             case 8:
                 if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32")) {
                     return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32");
@@ -240,10 +251,49 @@ static ALenum get_al_format(struct ao *ao, int format)
                 if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO32")) {
                     return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO32");
                 }
-            default:
-                return alGetEnumValue((ALchar*)"AL_FORMAT_MONO32");
+                break;
+            case 1:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_MONO32");
+                }
+                break;
             }
         }
+
+    case AF_FORMAT_FLOAT:
+        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
+            switch (channels) {
+            case 8:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32");
+                }
+                break;
+            case 7:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32");
+                }
+                break;
+            case 6:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32");
+                }
+                break;
+            case 4:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32");
+                }
+            case 2:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO_FLOAT32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO_FLOAT32");
+                }
+            case 1:
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO_FLOAT32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_MONO_FLOAT32");
+                }
+                break;
+            }
+        }
+        break;
     }
     return AL_FALSE;
 }
@@ -273,30 +323,12 @@ static int init(struct ao *ao)
     ALCcontext *ctx = NULL;
     ALCint freq = 0;
     ALCint attribs[] = {ALC_FREQUENCY, ao->samplerate, 0, 0};
-    int i;
     struct priv *p = ao->priv;
     if (ao_data) {
         MP_FATAL(ao, "Not reentrant!\n");
         return -1;
     }
     ao_data = ao;
-    struct mp_chmap_sel sel = {0};
-    for (i = 0; speaker_pos[i].id != -1; i++)
-        mp_chmap_sel_add_speaker(&sel, speaker_pos[i].id);
-    if (!ao_chmap_sel_adjust(ao, &sel, &ao->channels))
-        goto err_out;
-    struct speaker speakers[MAX_CHANS];
-    for (i = 0; i < ao->channels.num; i++) {
-        speakers[i].id = -1;
-        for (int n = 0; speaker_pos[n].id >= 0; n++) {
-            if (speaker_pos[n].id == ao->channels.speaker[i])
-                speakers[i] = speaker_pos[n];
-        }
-        if (speakers[i].id < 0) {
-            MP_FATAL(ao, "Unknown channel layout\n");
-            goto err_out;
-        }
-    }
     char *dev_name = ao->device;
     dev = alcOpenDevice(dev_name && dev_name[0] ? dev_name : NULL);
     if (!dev) {
@@ -309,14 +341,8 @@ static int init(struct ao *ao)
     alListenerfv(AL_ORIENTATION, direction);
 
     alGenSources(1, &source);
-    if (alGetEnumValue((ALchar*)"ALC_HRTF_SOFT")) {
-        ALCint hrtf_status;
-        alcGetIntegerv(dev, alGetEnumValue((ALchar*)"ALC_HRTF_SOFT"), 1, &hrtf_status);
-        if (hrtf_status == ALC_FALSE) {
-            if (alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT")) {
-                alSourcei(source, alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
-            }
-        }
+    if (p->direct_channels && alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT")) {
+        alSourcei(source, alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
     }
 
     cur_buf = 0;
@@ -327,21 +353,108 @@ static int init(struct ao *ao)
     if (alcGetError(dev) == ALC_NO_ERROR && freq)
         ao->samplerate = freq;
 
-    p->al_format = AL_FALSE;
+    // Check sample format
     int try_formats[AF_FORMAT_COUNT];
+    enum af_format sample_format = 0;
     af_get_best_sample_formats(ao->format, try_formats);
     for (int n = 0; try_formats[n]; n++) {
-        p->al_format = get_al_format(ao, try_formats[n]);
-        if (p->al_format != AL_FALSE) {
+        sample_format = get_supported_format(try_formats[n]);
+        if (sample_format != AF_FORMAT_UNKNOWN) {
             ao->format = try_formats[n];
             break;
         }
     }
 
-    if (p->al_format == AL_FALSE) {
+    if (sample_format == AF_FORMAT_UNKNOWN) {
         MP_FATAL(ao, "Can't find appropriate sample format.\n");
         uninit(ao);
         goto err_out;
+    }
+
+    // Some OpenAL drivers can down-mix 7.1 to any other number of speakers if they
+    // support the layout, but not OpenAL Soft when AL_DIRECT_CHANNELS_SOFT is set.
+    // There is no way to get how many channels OpenAL has, thus there is an option
+    // to enable AL_DIRECT_CHANNELS_SOFT.
+    // Check what formats the OpenAL driver supports.
+    p->al_format = AL_FALSE;
+    int num_channels = ao->channels.num;
+
+    do {
+        p->al_format = get_supported_layout(sample_format, num_channels);
+        if (p->al_format == AL_FALSE) {
+            num_channels = num_channels - 1;
+        }
+    } while (p->al_format == AL_FALSE && num_channels > 1);
+
+    if (p->al_format == AL_FALSE) {
+        MP_FATAL(ao, "Can't find appropriate channel layout.\n");
+        uninit(ao);
+        goto err_out;
+    }
+
+    // Request number of speakers for output from ao.
+    struct mp_chmap_sel sel = {0};
+    switch (num_channels) {
+        case 8:
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[2].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[7].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[8].id);
+            break;
+        case 7:
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[2].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[6].id);
+            break;
+        case 6:
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[2].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
+            break;
+        case 4:
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
+            break;
+        case 2:
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
+            break;
+        case 1:
+            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
+            break;
+    }
+
+    if (!ao_chmap_sel_adjust(ao, &sel, &ao->channels))
+        goto err_out;
+
+    if (ao->channels.num != num_channels) {
+        num_channels = ao->channels.num;
+        do {
+            p->al_format = get_supported_layout(sample_format, num_channels);
+            if (p->al_format == AL_FALSE) {
+                num_channels = num_channels - 1;
+            }
+        } while (p->al_format == AL_FALSE && num_channels > 1);
+
+        if (p->al_format == AL_FALSE) {
+            MP_FATAL(ao, "Can't find appropriate channel layout.\n");
+            uninit(ao);
+            goto err_out;
+        }
     }
 
     p->chunk_size = CHUNK_SAMPLES * af_fmt_to_bytes(ao->format);
@@ -476,4 +589,9 @@ const struct ao_driver audio_out_openal = {
     .reset     = reset,
     .drain     = drain,
     .priv_size = sizeof(struct priv),
+    .options = (const struct m_option[]) {
+        OPT_FLAG("direct-channels", direct_channels, 0),
+        {0}
+    },
+    .options_prefix = "openal",
 };
