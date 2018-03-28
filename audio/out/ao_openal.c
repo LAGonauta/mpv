@@ -308,6 +308,16 @@ static int init(struct ao *ao)
     alListenerfv(AL_ORIENTATION, direction);
 
     alGenSources(1, &source);
+    if (alGetEnumValue("ALC_HRTF_SOFT")) {
+        ALCint hrtf_status;
+        alcGetIntegerv(dev, alGetEnumValue("ALC_HRTF_SOFT"), 1, &hrtf_status);
+        if (hrtf_status == ALC_FALSE) {
+            if (alGetEnumValue("AL_DIRECT_CHANNELS_SOFT")) {
+                alSourcei(source, alGetEnumValue("AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
+            }
+        }
+    }
+
     cur_buf = 0;
     unqueue_buf = 0;
     alGenBuffers(NUM_BUF, buffers);
