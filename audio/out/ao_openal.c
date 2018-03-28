@@ -130,12 +130,12 @@ static enum af_format get_af_format(int format)
 {
     switch (format) {
     case AF_FORMAT_U8:
-        if (alGetEnumValue("AL_FORMAT_MONO8"))
+        if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO8"))
             return AL_TRUE;
         break;
 
     case AF_FORMAT_S16:
-        if (alGetEnumValue("AL_FORMAT_MONO16"))
+        if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO16"))
             return AL_TRUE;
         break;
 
@@ -164,84 +164,84 @@ static ALenum get_al_format(struct ao *ao, int format)
     case AF_FORMAT_U8:
         switch (ao->channels.num) {
         case 8:
-            if (alGetEnumValue("AL_FORMAT_71CHN8")) {
-                return alGetEnumValue("AL_FORMAT_71CHN8");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN8")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN8");
             }
         case 7:
-            if (alGetEnumValue("AL_FORMAT_61CHN8")) {
-                return alGetEnumValue("AL_FORMAT_61CHN8");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN8")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN8");
             }
         case 6:
-            if (alGetEnumValue("AL_FORMAT_51CHN8")) {
-                return alGetEnumValue("AL_FORMAT_51CHN8");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN8")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN8");
             }
         case 4:
-            if (alGetEnumValue("AL_FORMAT_QUAD8")) {
-                return alGetEnumValue("AL_FORMAT_QUAD8");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD8")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD8");
             }
         case 2:
-            if (alGetEnumValue("AL_FORMAT_STEREO8")) {
-                return alGetEnumValue("AL_FORMAT_STEREO8");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO8")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO8");
             }
         default:
-            return alGetEnumValue("AL_FORMAT_MONO8");
+            return alGetEnumValue((ALchar*)"AL_FORMAT_MONO8");
         }
 
     case AF_FORMAT_S16:
         switch (ao->channels.num) {
         case 8:
-            if (alGetEnumValue("AL_FORMAT_71CHN16")) {
-                return alGetEnumValue("AL_FORMAT_71CHN16");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN16")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN16");
             }
         case 7:
-            if (alGetEnumValue("AL_FORMAT_61CHN16")) {
-                return alGetEnumValue("AL_FORMAT_61CHN16");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN16")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN16");
             }
         case 6:
-            if (alGetEnumValue("AL_FORMAT_51CHN16")) {
-                return alGetEnumValue("AL_FORMAT_51CHN16");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN16")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN16");
             }
         case 4:
-            if (alGetEnumValue("AL_FORMAT_QUAD16")) {
-                return alGetEnumValue("AL_FORMAT_QUAD16");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD16")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD16");
             }
         case 2:
-            if (alGetEnumValue("AL_FORMAT_STEREO16")) {
-                return alGetEnumValue("AL_FORMAT_STEREO16");
+            if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO16")) {
+                return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO16");
             }
         default:
-            return alGetEnumValue("AL_FORMAT_MONO16");
+            return alGetEnumValue((ALchar*)"AL_FORMAT_MONO16");
         }
 
     case AF_FORMAT_S32:
         if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL) {
             switch (ao->channels.num) {
             case 8:
-                if (alGetEnumValue("AL_FORMAT_71CHN32")) {
-                    return alGetEnumValue("AL_FORMAT_71CHN32");
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32");
                 }
                 break;
             case 7:
-                if (alGetEnumValue("AL_FORMAT_61CHN32")) {
-                    return alGetEnumValue("AL_FORMAT_61CHN32");
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32");
                 }
                 break;
             case 6:
-                if (alGetEnumValue("AL_FORMAT_51CHN32")) {
-                    return alGetEnumValue("AL_FORMAT_51CHN32");
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32");
                 }
                 break;
             case 4:
-                if (alGetEnumValue("AL_FORMAT_QUAD32")) {
-                    return alGetEnumValue("AL_FORMAT_QUAD32");
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32");
                 }
                 break;
             case 2:
-                if (alGetEnumValue("AL_FORMAT_STEREO32")) {
-                    return alGetEnumValue("AL_FORMAT_STEREO32");
+                if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO32")) {
+                    return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO32");
                 }
             default:
-                return alGetEnumValue("AL_FORMAT_MONO32");
+                return alGetEnumValue((ALchar*)"AL_FORMAT_MONO32");
             }
         }
     }
@@ -309,12 +309,12 @@ static int init(struct ao *ao)
     alListenerfv(AL_ORIENTATION, direction);
 
     alGenSources(1, &source);
-    if (alGetEnumValue("ALC_HRTF_SOFT")) {
+    if (alGetEnumValue((ALchar*)"ALC_HRTF_SOFT")) {
         ALCint hrtf_status;
-        alcGetIntegerv(dev, alGetEnumValue("ALC_HRTF_SOFT"), 1, &hrtf_status);
+        alcGetIntegerv(dev, alGetEnumValue((ALchar*)"ALC_HRTF_SOFT"), 1, &hrtf_status);
         if (hrtf_status == ALC_FALSE) {
-            if (alGetEnumValue("AL_DIRECT_CHANNELS_SOFT")) {
-                alSourcei(source, alGetEnumValue("AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
+            if (alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT")) {
+                alSourcei(source, alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
             }
         }
     }
