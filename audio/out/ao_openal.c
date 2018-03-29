@@ -108,24 +108,6 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
     return CONTROL_UNKNOWN;
 }
 
-struct speaker {
-    int id;
-    float pos[3];
-};
-
-static const struct speaker speaker_pos[] = {
-    {MP_SPEAKER_ID_FL,   {-0.500,  0, -0.866}}, // -30 deg
-    {MP_SPEAKER_ID_FR,   { 0.500,  0, -0.866}}, //  30 deg
-    {MP_SPEAKER_ID_FC,   {     0,  0,     -1}}, //   0 deg
-    {MP_SPEAKER_ID_LFE,  {     0, -1,      0}}, //   below
-    {MP_SPEAKER_ID_BL,   {-0.609,  0,  0.793}}, // -142.5 deg
-    {MP_SPEAKER_ID_BR,   { 0.609,  0,  0.793}}, //  142.5 deg
-    {MP_SPEAKER_ID_BC,   {     0,  0,      1}}, //  180 deg
-    {MP_SPEAKER_ID_SL,   {-0.985,  0,  0.174}}, // -100 deg
-    {MP_SPEAKER_ID_SR,   { 0.985,  0,  0.174}}, //  100 deg
-    {-1},
-};
-
 static enum af_format get_supported_format(int format)
 {
     switch (format) {
@@ -370,14 +352,8 @@ static int init(struct ao *ao)
         goto err_out;
     }
 
-    // Some OpenAL drivers can down-mix 7.1 to any other number of speakers if they
-    // support the layout, but not OpenAL Soft when AL_DIRECT_CHANNELS_SOFT is set.
-    // There is no way to get how many channels OpenAL has, thus there is an option
-    // to enable AL_DIRECT_CHANNELS_SOFT.
-    // Check what formats the OpenAL driver supports.
-    p->al_format = AL_FALSE;
+    // Check if OpenAL driver supports the desired number of channels.
     int num_channels = ao->channels.num;
-
     do {
         p->al_format = get_supported_layout(sample_format, num_channels);
         if (p->al_format == AL_FALSE) {
@@ -385,75 +361,13 @@ static int init(struct ao *ao)
         }
     } while (p->al_format == AL_FALSE && num_channels > 1);
 
-    if (p->al_format == AL_FALSE) {
+    // Request number of speakers for output from ao.
+    mp_chmap_from_channels(&ao->channels, num_channels);
+
+    if (p->al_format == AL_FALSE || !mp_chmap_is_valid(&ao->channels)) {
         MP_FATAL(ao, "Can't find appropriate channel layout.\n");
         uninit(ao);
         goto err_out;
-    }
-
-    // Request number of speakers for output from ao.
-    struct mp_chmap_sel sel = {0};
-    switch (num_channels) {
-        case 8:
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[2].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[7].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[8].id);
-            break;
-        case 7:
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[2].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[6].id);
-            break;
-        case 6:
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[2].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
-            break;
-        case 4:
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[4].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[5].id);
-            break;
-        case 2:
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[0].id);
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[1].id);
-            break;
-        case 1:
-            mp_chmap_sel_add_speaker(&sel, speaker_pos[3].id);
-            break;
-    }
-
-    if (!ao_chmap_sel_adjust(ao, &sel, &ao->channels))
-        goto err_out;
-
-    if (ao->channels.num != num_channels) {
-        num_channels = ao->channels.num;
-        do {
-            p->al_format = get_supported_layout(sample_format, num_channels);
-            if (p->al_format == AL_FALSE) {
-                num_channels = num_channels - 1;
-            }
-        } while (p->al_format == AL_FALSE && num_channels > 1);
-
-        if (p->al_format == AL_FALSE) {
-            MP_FATAL(ao, "Can't find appropriate channel layout.\n");
-            uninit(ao);
-            goto err_out;
-        }
     }
 
     p->chunk_size = CHUNK_SAMPLES * af_fmt_to_bytes(ao->format);
@@ -536,7 +450,7 @@ static int play(struct ao *ao, void **data, int samples, int flags)
     ALint state;
     int num = samples / CHUNK_SAMPLES;
     for (int i = 0; i < num; i++) {
-        char *d = data[0];
+        char *d = *data;
         d += i * p->chunk_size * ao->channels.num;
         alBufferData(buffers[cur_buf], p->al_format, d, p->chunk_size * ao->channels.num, ao->samplerate);
         alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
