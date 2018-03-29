@@ -362,7 +362,20 @@ static int init(struct ao *ao)
     } while (p->al_format == AL_FALSE && num_channels > 1);
 
     // Request number of speakers for output from ao.
-    mp_chmap_from_channels(&ao->channels, num_channels);
+    const struct mp_chmap possible_layouts[] = {
+        {0},                                        // empty
+        MP_CHMAP_INIT_MONO,                         // mono
+        MP_CHMAP_INIT_STEREO,                          // stereo
+        {0},                                        // 2.1
+        MP_CHMAP4(FL, FR, BL, BR),                  // 4.0
+        {0},                                        // 5.0
+        MP_CHMAP6(FL, FR, FC, LFE, BL, BR),         // 5.1
+        MP_CHMAP7(FL, FR, FC, LFE, BC, SL, SR),     // 6.1
+        MP_CHMAP8(FL, FR, FC, LFE, BL, BR, SL, SR), // 7.1
+    };
+    ao->channels = possible_layouts[num_channels];
+    if (!ao->channels.num)
+        mp_chmap_set_unknown(&ao->channels, num_channels);
 
     if (p->al_format == AL_FALSE || !mp_chmap_is_valid(&ao->channels)) {
         MP_FATAL(ao, "Can't find appropriate channel layout.\n");
