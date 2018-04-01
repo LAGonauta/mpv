@@ -57,9 +57,11 @@
 #include "options/m_option.h"
 
 #define MAX_CHANS MP_NUM_CHANNELS
-#define NUM_BUF 128
-#define CHUNK_SAMPLES 256
-static ALuint buffers[NUM_BUF];
+#define MAX_BUF 128
+#define MAX_PERIOD_SIZE 32768
+#define MAX_SAMPLES 32768
+static ALuint buffers[MAX_BUF];
+static ALuint buffer_size[MAX_BUF];
 static ALuint source;
 
 static int cur_buf;
@@ -69,7 +71,9 @@ static struct ao *ao_data;
 
 struct priv {
     ALenum al_format;
-    int chunk_size;
+    int num_buffers;
+    int period_size;
+    int num_samples;
     int direct_channels;
 };
 
@@ -282,10 +286,11 @@ static ALenum get_supported_layout(int format, int channels)
 // close audio device
 static void uninit(struct ao *ao)
 {
+    struct priv *p = ao->priv;
     alSourceStop(source);
     alSourcei(source, AL_BUFFER, 0);
 
-    alDeleteBuffers(NUM_BUF, buffers);
+    alDeleteBuffers(p->num_buffers, buffers);
     alDeleteSources(1, &source);
 
     ALCcontext *ctx = alcGetCurrentContext();
@@ -328,7 +333,11 @@ static int init(struct ao *ao)
 
     cur_buf = 0;
     unqueue_buf = 0;
-    alGenBuffers(NUM_BUF, buffers);
+    for (int i = 0; i < p->num_buffers; ++i) {
+        buffer_size[i] = 0;
+    }
+
+    alGenBuffers(p->num_buffers, buffers);
 
     alcGetIntegerv(dev, ALC_FREQUENCY, 1, &freq);
     if (alcGetError(dev) == ALC_NO_ERROR && freq)
@@ -365,7 +374,7 @@ static int init(struct ao *ao)
     const struct mp_chmap possible_layouts[] = {
         {0},                                        // empty
         MP_CHMAP_INIT_MONO,                         // mono
-        MP_CHMAP_INIT_STEREO,                          // stereo
+        MP_CHMAP_INIT_STEREO,                       // stereo
         {0},                                        // 2.1
         MP_CHMAP4(FL, FR, BL, BR),                  // 4.0
         {0},                                        // 5.0
@@ -383,8 +392,7 @@ static int init(struct ao *ao)
         goto err_out;
     }
 
-    p->chunk_size = CHUNK_SAMPLES * af_fmt_to_bytes(ao->format);
-    ao->period_size = CHUNK_SAMPLES;
+    ao->period_size = p->period_size;
     return 0;
 
 err_out:
@@ -402,10 +410,11 @@ static void drain(struct ao *ao)
     }
 }
 
-static void unqueue_buffers(void)
+static void unqueue_buffers(struct ao *ao)
 {
+    struct priv *q = ao->priv;
     ALint p;
-    int till_wrap = NUM_BUF - unqueue_buf;
+    int till_wrap = q->num_buffers - unqueue_buf;
     alGetSourcei(source, AL_BUFFERS_PROCESSED, &p);
     if (p >= till_wrap) {
         alSourceUnqueueBuffers(source, till_wrap, &buffers[unqueue_buf]);
@@ -424,7 +433,7 @@ static void unqueue_buffers(void)
 static void reset(struct ao *ao)
 {
     alSourceStop(source);
-    unqueue_buffers();
+    unqueue_buffers(ao);
 }
 
 /**
@@ -445,13 +454,14 @@ static void audio_resume(struct ao *ao)
 
 static int get_space(struct ao *ao)
 {
+    struct priv *p = ao->priv;
     ALint queued;
-    unqueue_buffers();
+    unqueue_buffers(ao);
     alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
-    queued = NUM_BUF - queued - 3;
+    queued = p->num_buffers - queued;
     if (queued < 0)
         return 0;
-    return queued * CHUNK_SAMPLES;
+    return p->num_samples * queued;
 }
 
 /**
@@ -460,25 +470,28 @@ static int get_space(struct ao *ao)
 static int play(struct ao *ao, void **data, int samples, int flags)
 {
     struct priv *p = ao->priv;
+    char *d = *data;
+    buffer_size[cur_buf] = samples;
+    alBufferData(buffers[cur_buf], p->al_format, d,
+                 buffer_size[cur_buf] * af_fmt_to_bytes(ao->format) * \
+                 ao->channels.num,
+                 ao->samplerate);
+    alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
+    cur_buf = (cur_buf + 1) % p->num_buffers;
+
     ALint state;
-    int num = samples / CHUNK_SAMPLES;
-    for (int i = 0; i < num; i++) {
-        char *d = *data;
-        d += i * p->chunk_size * ao->channels.num;
-        alBufferData(buffers[cur_buf], p->al_format, d, p->chunk_size * ao->channels.num, ao->samplerate);
-        alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
-        cur_buf = (cur_buf + 1) % NUM_BUF;
-    }
     alGetSourcei(source, AL_SOURCE_STATE, &state);
     if (state != AL_PLAYING) // checked here in case of an underrun
         alSourcePlay(source);
-    return num * CHUNK_SAMPLES;
+
+    return samples;
 }
 
 static double get_delay(struct ao *ao)
 {
+    struct priv *p = ao->priv;
     ALint queued;
-    unqueue_buffers();
+    unqueue_buffers(ao);
     alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
 
     double soft_source_latency = 0;
@@ -497,7 +510,14 @@ static double get_delay(struct ao *ao)
         soft_source_latency = -offset;
     }
 
-    return (queued * CHUNK_SAMPLES / (double)ao->samplerate) + soft_source_latency;
+    int queued_samples = 0;
+    for (int i = 0, index = cur_buf; i < queued; ++i)
+    {
+        queued_samples += buffer_size[index];
+        index = (index + 1) % p->num_buffers;
+    }
+
+    return (queued_samples / (double)ao->samplerate) + soft_source_latency;
 }
 
 #define OPT_BASE_STRUCT struct priv
@@ -516,7 +536,16 @@ const struct ao_driver audio_out_openal = {
     .reset     = reset,
     .drain     = drain,
     .priv_size = sizeof(struct priv),
+    .priv_defaults = &(const struct priv) {
+        .num_buffers = 4,
+        .period_size = 256,
+        .num_samples = 8192,
+        .direct_channels = 0,
+    },
     .options = (const struct m_option[]) {
+        OPT_INTRANGE("num-buffers", num_buffers, 4, 2, MAX_BUF),
+        OPT_INTRANGE("period-size", period_size, 256, 256, MAX_PERIOD_SIZE),
+        OPT_INTRANGE("num-samples", num_samples, 8192, 256, MAX_SAMPLES),
         OPT_FLAG("direct-channels", direct_channels, 0),
         {0}
     },
