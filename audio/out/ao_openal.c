@@ -77,8 +77,6 @@ struct priv {
     int direct_channels;
 };
 
-static void reset(struct ao *ao);
-
 static int control(struct ao *ao, enum aocontrol cmd, void *arg)
 {
     ALboolean mute;
