@@ -480,8 +480,7 @@ static int play(struct ao *ao, void **data, int samples, int flags)
             remaining_samples -= remaining_samples;
         }
         alBufferData(buffers[cur_buf], p->al_format, d,
-            buffer_size[cur_buf] * af_fmt_to_bytes(ao->format) * \
-            ao->channels.num,
+            buffer_size[cur_buf] * ao->sstride,
             ao->samplerate);
         alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
         cur_buf = (cur_buf + 1) % p->num_buffers;
