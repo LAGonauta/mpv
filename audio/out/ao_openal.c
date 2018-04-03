@@ -377,7 +377,7 @@ static int init(struct ao *ao)
         MP_CHMAP4(FL, FR, BL, BR),                  // 4.0
         {0},                                        // 5.0
         MP_CHMAP6(FL, FR, FC, LFE, BL, BR),         // 5.1
-        MP_CHMAP7(FL, FR, FC, LFE, BC, SL, SR),     // 6.1
+        MP_CHMAP7(FL, FR, FC, LFE, SL, SR, BC),     // 6.1
         MP_CHMAP8(FL, FR, FC, LFE, BL, BR, SL, SR), // 7.1
     };
     ao->channels = possible_layouts[num_channels];
@@ -469,13 +469,23 @@ static int play(struct ao *ao, void **data, int samples, int flags)
 {
     struct priv *p = ao->priv;
     char *d = *data;
-    buffer_size[cur_buf] = samples;
-    alBufferData(buffers[cur_buf], p->al_format, d,
-                 buffer_size[cur_buf] * af_fmt_to_bytes(ao->format) * \
-                 ao->channels.num,
-                 ao->samplerate);
-    alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
-    cur_buf = (cur_buf + 1) % p->num_buffers;
+    int remaining_samples = samples;
+    do {
+        if (remaining_samples > p->num_samples) {
+            buffer_size[cur_buf] = p->num_samples;
+            remaining_samples -= p->num_samples;
+        }
+        else {
+            buffer_size[cur_buf] = remaining_samples;
+            remaining_samples -= remaining_samples;
+        }
+        alBufferData(buffers[cur_buf], p->al_format, d,
+            buffer_size[cur_buf] * af_fmt_to_bytes(ao->format) * \
+            ao->channels.num,
+            ao->samplerate);
+        alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
+        cur_buf = (cur_buf + 1) % p->num_buffers;
+    } while (remaining_samples > 0);
 
     ALint state;
     alGetSourcei(source, AL_SOURCE_STATE, &state);
@@ -514,7 +524,6 @@ static double get_delay(struct ao *ao)
         queued_samples += buffer_size[index];
         index = (index + 1) % p->num_buffers;
     }
-
     return (queued_samples / (double)ao->samplerate) + soft_source_latency;
 }
 
