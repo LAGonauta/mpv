@@ -137,109 +137,42 @@ static enum af_format get_supported_format(int format)
 
 static ALenum get_supported_layout(int format, int channels)
 {
+    char enum_name[32] = "AL_FORMAT_";
+
+    switch (channels) {
+        case 8:
+            strcat(enum_name, "71CHN");
+            break;
+        case 7:
+            strcat(enum_name, "61CHN");
+            break;
+        case 6:
+            strcat(enum_name, "51CHN");
+            break;
+        case 4:
+            strcat(enum_name, "QUAD");
+            break;
+        case 2:
+            strcat(enum_name, "STEREO");
+            break;
+        case 1:
+            strcat(enum_name, "MONO");
+            break;
+    }
+
     switch (format) {
     case AF_FORMAT_U8:
-        switch (channels) {
-        case 8:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN8")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN8");
-            }
+            strcat(enum_name, "8");
             break;
-        case 7:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN8")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN8");
-            }
-            break;
-        case 6:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN8")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN8");
-            }
-            break;
-        case 4:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD8")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD8");
-            }
-            break;
-        case 2:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO8")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO8");
-            }
-            break;
-        case 1:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO8")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_MONO8");
-            }
-            break;
-        }
 
     case AF_FORMAT_S16:
-        switch (channels) {
-        case 8:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN16")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN16");
-            }
-            break;
-        case 7:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN16")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN16");
-            }
-            break;
-        case 6:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN16")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN16");
-            }
-            break;
-        case 4:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD16")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD16");
-            }
-            break;
-        case 2:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO16")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO16");
-            }
-            break;
         case 1:
-            if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO16")) {
-                return alGetEnumValue((ALchar*)"AL_FORMAT_MONO16");
-            }
+            strcat(enum_name, "16");
             break;
-        }
 
     case AF_FORMAT_S32:
         if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL) {
-            switch (channels) {
-            case 8:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32");
-                }
-                break;
-            case 7:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32");
-                }
-                break;
-            case 6:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32");
-                }
-                break;
-            case 4:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32");
-                }
-                break;
-            case 2:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO32");
-                }
-                break;
-            case 1:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_MONO32");
-                }
-                break;
-            }
+            strcat(enum_name, "32");
         }
 
     // Uses same enum name as AF_FORMAT_S32 for multichannel playback, while
@@ -247,38 +180,18 @@ static ALenum get_supported_layout(int format, int channels)
     // AF_FORMAT_S32 and reused the names.
     case AF_FORMAT_FLOAT:
         if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
-            switch (channels) {
-            case 8:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_71CHN32");
-                }
-                break;
-            case 7:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_61CHN32");
-                }
-                break;
-            case 6:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_51CHN32");
-                }
-                break;
-            case 4:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_QUAD32");
-                }
-            case 2:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_STEREO_FLOAT32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_STEREO_FLOAT32");
-                }
-            case 1:
-                if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO_FLOAT32")) {
-                    return alGetEnumValue((ALchar*)"AL_FORMAT_MONO_FLOAT32");
-                }
-                break;
+            if (channels > 2) {
+                strcat(enum_name, "32");
+            }
+            else {
+                strcat(enum_name, "_FLOAT32");
             }
         }
         break;
+    }
+
+    if (alGetEnumValue((ALchar*)enum_name)) {
+        return alGetEnumValue((ALchar*)enum_name);
     }
     return AL_FALSE;
 }
