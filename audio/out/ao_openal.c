@@ -242,6 +242,9 @@ static ALenum get_supported_layout(int format, int channels)
             }
         }
 
+    // Uses same enum name as AF_FORMAT_S32 for multichannel playback, while
+    // it is different for for mono and stereo. OpenAL Soft does not support
+    // AF_FORMAT_S32 and reused the names.
     case AF_FORMAT_FLOAT:
         if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
             switch (channels) {
