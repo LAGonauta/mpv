@@ -425,8 +425,7 @@ static double get_delay(struct ao *ao)
         // played minus the offset (seconds already played)
         soft_source_latency = offsets[1] - offsets[0];
     }
-    else
-    {
+    else {
         float offset = 0;
         alGetSourcef(source, AL_SEC_OFFSET, &offset);
         soft_source_latency = -offset;
