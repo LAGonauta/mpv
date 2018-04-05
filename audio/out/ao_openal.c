@@ -94,13 +94,15 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
     }
     case AOCONTROL_GET_MUTE:
     case AOCONTROL_SET_MUTE:
-        bool mute = *(bool *)arg;
-        ALfloat al_mute = (ALfloat)(!mute);
-        if (cmd == AOCONTROL_SET_MUTE) {
-            alSourcef(source, AL_GAIN, al_mute);
+        {
+            bool mute = *(bool *)arg;
+            ALfloat al_mute = (ALfloat)(!mute);
+            if (cmd == AOCONTROL_SET_MUTE) {
+                alSourcef(source, AL_GAIN, al_mute);
+            }
+            alGetSourcef(source, AL_GAIN, &al_mute);
+            *(bool *)arg = !((bool)al_mute);
         }
-        alGetSourcef(source, AL_GAIN, &al_mute);
-        *(bool *)arg = !((bool)al_mute);
         return CONTROL_TRUE;
 
     case AOCONTROL_HAS_SOFT_VOLUME:
