@@ -168,7 +168,6 @@ static ALenum get_supported_layout(int format, int channels)
             break;
 
     case AF_FORMAT_S16:
-        case 1:
             strcat(enum_name, "16");
             break;
 
