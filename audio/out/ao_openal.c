@@ -384,30 +384,38 @@ static int get_space(struct ao *ao)
 static int play(struct ao *ao, void **data, int samples, int flags)
 {
     struct priv *p = ao->priv;
-    char *d = *data;
-    int remaining_samples = samples;
-    do {
-        if (remaining_samples > p->num_samples) {
-            buffer_size[cur_buf] = p->num_samples;
-            remaining_samples -= p->num_samples;
-        }
-        else {
-            buffer_size[cur_buf] = remaining_samples;
-            remaining_samples -= remaining_samples;
-        }
+    int buffered_samples = 0;
+
+    if (flags == AOPLAY_FINAL_CHUNK) {
+        char *d = *data;
+        buffer_size[cur_buf] = samples;
         alBufferData(buffers[cur_buf], p->al_format, d,
             buffer_size[cur_buf] * ao->sstride,
             ao->samplerate);
         alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
         cur_buf = (cur_buf + 1) % p->num_buffers;
-    } while (remaining_samples > 0);
+        buffered_samples = samples;
+    }
+    else {
+        int num = samples / p->num_samples;
+        for (int i = 0; i < num; i++) {
+            char *d = *data;
+            d += i * p->num_samples * ao->sstride;
+            buffer_size[cur_buf] = p->num_samples;
+            alBufferData(buffers[cur_buf], p->al_format, d,
+                buffer_size[cur_buf] * ao->sstride, ao->samplerate);
+            alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
+            cur_buf = (cur_buf + 1) % p->num_buffers;
+        }
+        buffered_samples = num * p->num_samples;
+    }
 
     ALint state;
     alGetSourcei(source, AL_SOURCE_STATE, &state);
     if (state != AL_PLAYING) // checked here in case of an underrun
         alSourcePlay(source);
 
-    return samples;
+    return buffered_samples;
 }
 
 static double get_delay(struct ao *ao)
