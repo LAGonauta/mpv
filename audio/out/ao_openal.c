@@ -58,7 +58,6 @@
 
 #define MAX_CHANS MP_NUM_CHANNELS
 #define MAX_BUF 128
-#define MAX_PERIOD_SIZE 32768
 #define MAX_SAMPLES 32768
 static ALuint buffers[MAX_BUF];
 static ALuint buffer_size[MAX_BUF];
@@ -72,7 +71,6 @@ static struct ao *ao_data;
 struct priv {
     ALenum al_format;
     int num_buffers;
-    int period_size;
     int num_samples;
     int direct_channels;
 };
@@ -308,7 +306,7 @@ static int init(struct ao *ao)
         goto err_out;
     }
 
-    ao->period_size = p->period_size;
+    ao->period_size = p->num_samples;
     return 0;
 
 err_out:
@@ -468,13 +466,11 @@ const struct ao_driver audio_out_openal = {
     .priv_size = sizeof(struct priv),
     .priv_defaults = &(const struct priv) {
         .num_buffers = 4,
-        .period_size = 256,
         .num_samples = 8192,
         .direct_channels = 0,
     },
     .options = (const struct m_option[]) {
         OPT_INTRANGE("num-buffers", num_buffers, 0, 2, MAX_BUF),
-        OPT_INTRANGE("period-size", period_size, 0, 256, MAX_PERIOD_SIZE),
         OPT_INTRANGE("num-samples", num_samples, 0, 256, MAX_SAMPLES),
         OPT_FLAG("direct-channels", direct_channels, 0),
         {0}
