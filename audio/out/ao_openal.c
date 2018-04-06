@@ -388,7 +388,7 @@ static int play(struct ao *ao, void **data, int samples, int flags)
     struct priv *p = ao->priv;
     int buffered_samples = 0;
 
-    if (flags == AOPLAY_FINAL_CHUNK) {
+    if (flags & AOPLAY_FINAL_CHUNK) {
         char *d = *data;
         buffer_size[cur_buf] = samples;
         alBufferData(buffers[cur_buf], p->al_format, d,
