@@ -141,9 +141,7 @@ static ALenum get_supported_layout(int format, int channels)
     const char *channel_str[] = {
         [1] = "MONO",
         [2] = "STEREO",
-        [3] = "",
         [4] = "QUAD",
-        [5] = "",
         [6] = "51CHN",
         [7] = "61CHN",
         [8] = "71CHN",
@@ -154,18 +152,17 @@ static ALenum get_supported_layout(int format, int channels)
         [AF_FORMAT_S32] = "32",
         [AF_FORMAT_FLOAT] = "_FLOAT32",
     };
-    char enum_name[32];
+    if (channel_str[channels] == NULL || format_str[format] == NULL)
+        return AL_FALSE;
 
+    char enum_name[32];
     // AF_FORMAT_FLOAT uses same enum name as AF_FORMAT_S32 for multichannel
     // playback, while it is different for mono and stereo.
     // OpenAL Soft does not support AF_FORMAT_S32 and seems to reuse the names.
-    if (channels > 2 && format == AF_FORMAT_FLOAT) {
-        snprintf(enum_name, sizeof(enum_name) / sizeof(*enum_name),
-                 "AL_FORMAT_%s%s", channel_str[channels], "32");
-    } else {
-        snprintf(enum_name, sizeof(enum_name) / sizeof(*enum_name),
-                 "AL_FORMAT_%s%s", channel_str[channels], format_str[format]);
-    }
+    if (channels > 2 && format == AF_FORMAT_FLOAT)
+        format = AF_FORMAT_S32;
+    snprintf(enum_name, sizeof(enum_name), "AL_FORMAT_%s%s", channel_str[channels],
+             format_str[format]);
 
     if (alGetEnumValue((ALchar*)enum_name)) {
         return alGetEnumValue((ALchar*)enum_name);
