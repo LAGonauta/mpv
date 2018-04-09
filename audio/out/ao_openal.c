@@ -383,30 +383,29 @@ static int get_space(struct ao *ao)
 static int play(struct ao *ao, void **data, int samples, int flags)
 {
     struct priv *p = ao->priv;
-    int buffered_samples = 0;
 
+    int buffered_samples = 0;
+    int num = 0;
     if (flags & AOPLAY_FINAL_CHUNK) {
-        char *d = *data;
+        num = 1;
         buffer_size[cur_buf] = samples;
-        alBufferData(buffers[cur_buf], p->al_format, d,
-            buffer_size[cur_buf] * ao->sstride,
-            ao->samplerate);
-        alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
-        cur_buf = (cur_buf + 1) % p->num_buffers;
         buffered_samples = samples;
     }
     else {
-        int num = samples / p->num_samples;
-        for (int i = 0; i < num; i++) {
-            char *d = *data;
-            d += i * p->num_samples * ao->sstride;
+        num = samples / p->num_samples;
+        buffer_size[cur_buf] = p->num_samples;
+        buffered_samples = num * buffer_size[cur_buf];
+    }
+
+    for (int i = 0; i < num; i++) {
+        char *d = *data;
+        if (!(flags & AOPLAY_FINAL_CHUNK))
             buffer_size[cur_buf] = p->num_samples;
-            alBufferData(buffers[cur_buf], p->al_format, d,
-                buffer_size[cur_buf] * ao->sstride, ao->samplerate);
-            alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
-            cur_buf = (cur_buf + 1) % p->num_buffers;
-        }
-        buffered_samples = num * p->num_samples;
+        d += i * buffer_size[cur_buf] * ao->sstride;
+        alBufferData(buffers[cur_buf], p->al_format, d,
+            buffer_size[cur_buf] * ao->sstride, ao->samplerate);
+        alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
+        cur_buf = (cur_buf + 1) % p->num_buffers;
     }
 
     ALint state;
