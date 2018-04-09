@@ -404,7 +404,7 @@ static double get_delay(struct ao *ao)
     int queued_samples = 0;
     for (int i = 0, index = cur_buf; i < queued; ++i) {
         queued_samples += buffer_size[index];
-        index = (index + 1) % p->num_buffers;
+        index = ((index - 1) % p->num_buffers + p->num_buffers) % p->num_buffers;
     }
     return (queued_samples / (double)ao->samplerate) + soft_source_latency;
 }
