@@ -162,8 +162,7 @@ static ALenum get_supported_layout(int format, int channels)
     if (channels > 2 && format == AF_FORMAT_FLOAT) {
         snprintf(enum_name, sizeof(enum_name) / sizeof(*enum_name),
                  "AL_FORMAT_%s%s", channel_str[channels], "32");
-    }
-    else {
+    } else {
         snprintf(enum_name, sizeof(enum_name) / sizeof(*enum_name),
                  "AL_FORMAT_%s%s", channel_str[channels], format_str[format]);
     }
@@ -367,8 +366,7 @@ static int play(struct ao *ao, void **data, int samples, int flags)
     if (flags & AOPLAY_FINAL_CHUNK) {
         num = 1;
         buffered_samples = samples;
-    }
-    else {
+    } else {
         num = samples / p->num_samples;
         buffered_samples = num * p->num_samples;
     }
@@ -377,8 +375,7 @@ static int play(struct ao *ao, void **data, int samples, int flags)
         char *d = *data;
         if (flags & AOPLAY_FINAL_CHUNK) {
             buffer_size[cur_buf] = samples;
-        }
-        else {
+        } else {
             buffer_size[cur_buf] = p->num_samples;
         }
         d += i * buffer_size[cur_buf] * ao->sstride;
@@ -411,8 +408,7 @@ static double get_delay(struct ao *ao)
         // Additional latency to the play buffer, the remaining seconds to be
         // played minus the offset (seconds already played)
         soft_source_latency = offsets[1] - offsets[0];
-    }
-    else {
+    } else {
         float offset = 0;
         alGetSourcef(source, AL_SEC_OFFSET, &offset);
         soft_source_latency = -offset;
