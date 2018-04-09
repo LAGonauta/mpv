@@ -366,19 +366,21 @@ static int play(struct ao *ao, void **data, int samples, int flags)
     int num = 0;
     if (flags & AOPLAY_FINAL_CHUNK) {
         num = 1;
-        buffer_size[cur_buf] = samples;
         buffered_samples = samples;
     }
     else {
         num = samples / p->num_samples;
-        buffer_size[cur_buf] = p->num_samples;
-        buffered_samples = num * buffer_size[cur_buf];
+        buffered_samples = num * p->num_samples;
     }
 
     for (int i = 0; i < num; i++) {
         char *d = *data;
-        if (!(flags & AOPLAY_FINAL_CHUNK))
+        if (flags & AOPLAY_FINAL_CHUNK) {
+            buffer_size[cur_buf] = samples;
+        }
+        else {
             buffer_size[cur_buf] = p->num_samples;
+        }
         d += i * buffer_size[cur_buf] * ao->sstride;
         alBufferData(buffers[cur_buf], p->al_format, d,
             buffer_size[cur_buf] * ao->sstride, ao->samplerate);
