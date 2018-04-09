@@ -143,37 +143,37 @@ static ALenum get_supported_layout(int format, int channels)
 
     switch (channels) {
         case 8:
-            strcat(enum_name, "71CHN");
+            strncat(enum_name, "71CHN", sizeof(enum_name) / sizeof(*enum_name));
             break;
         case 7:
-            strcat(enum_name, "61CHN");
+            strncat(enum_name, "61CHN", sizeof(enum_name) / sizeof(*enum_name));
             break;
         case 6:
-            strcat(enum_name, "51CHN");
+            strncat(enum_name, "51CHN", sizeof(enum_name) / sizeof(*enum_name));
             break;
         case 4:
-            strcat(enum_name, "QUAD");
+            strncat(enum_name, "QUAD", sizeof(enum_name) / sizeof(*enum_name));
             break;
         case 2:
-            strcat(enum_name, "STEREO");
+            strncat(enum_name, "STEREO", sizeof(enum_name) / sizeof(*enum_name));
             break;
         case 1:
-            strcat(enum_name, "MONO");
+            strncat(enum_name, "MONO", sizeof(enum_name) / sizeof(*enum_name));
             break;
     }
 
     switch (format) {
     case AF_FORMAT_U8:
-            strcat(enum_name, "8");
+            strncat(enum_name, "8", sizeof(enum_name) / sizeof(*enum_name));
             break;
 
     case AF_FORMAT_S16:
-            strcat(enum_name, "16");
+            strncat(enum_name, "16", sizeof(enum_name) / sizeof(*enum_name));
             break;
 
     case AF_FORMAT_S32:
         if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL) {
-            strcat(enum_name, "32");
+            strncat(enum_name, "32", sizeof(enum_name) / sizeof(*enum_name));
         }
 
     // Uses same enum name as AF_FORMAT_S32 for multichannel playback, while
@@ -182,10 +182,10 @@ static ALenum get_supported_layout(int format, int channels)
     case AF_FORMAT_FLOAT:
         if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
             if (channels > 2) {
-                strcat(enum_name, "32");
+                strncat(enum_name, "32", sizeof(enum_name) / sizeof(*enum_name));
             }
             else {
-                strcat(enum_name, "_FLOAT32");
+                strncat(enum_name, "_FLOAT32", sizeof(enum_name) / sizeof(*enum_name));
             }
         }
         break;
