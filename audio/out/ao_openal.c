@@ -138,56 +138,34 @@ static enum af_format get_supported_format(int format)
 
 static ALenum get_supported_layout(int format, int channels)
 {
-    char enum_name[32] = "AL_FORMAT_";
+    const char *channel_str[] = {
+        [1] = "MONO",
+        [2] = "STEREO",
+        [3] = "",
+        [4] = "QUAD",
+        [5] = "",
+        [6] = "51CHN",
+        [7] = "61CHN",
+        [8] = "71CHN",
+    };
+    const char *format_str[] = {
+        [AF_FORMAT_U8] = "8",
+        [AF_FORMAT_S16] = "16",
+        [AF_FORMAT_S32] = "32",
+        [AF_FORMAT_FLOAT] = "_FLOAT32",
+    };
+    char enum_name[32];
 
-    switch (channels) {
-        case 8:
-            strncat(enum_name, "71CHN", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-        case 7:
-            strncat(enum_name, "61CHN", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-        case 6:
-            strncat(enum_name, "51CHN", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-        case 4:
-            strncat(enum_name, "QUAD", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-        case 2:
-            strncat(enum_name, "STEREO", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-        case 1:
-            strncat(enum_name, "MONO", sizeof(enum_name) / sizeof(*enum_name));
-            break;
+    // AF_FORMAT_FLOAT uses same enum name as AF_FORMAT_S32 for multichannel
+    // playback, while it is different for mono and stereo.
+    // OpenAL Soft does not support AF_FORMAT_S32 and seems to reuse the names.
+    if (channels > 2 && format == AF_FORMAT_FLOAT) {
+        snprintf(enum_name, sizeof(enum_name) / sizeof(*enum_name),
+                 "AL_FORMAT_%s%s", channel_str[channels], "32");
     }
-
-    switch (format) {
-    case AF_FORMAT_U8:
-            strncat(enum_name, "8", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-
-    case AF_FORMAT_S16:
-            strncat(enum_name, "16", sizeof(enum_name) / sizeof(*enum_name));
-            break;
-
-    case AF_FORMAT_S32:
-        if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL) {
-            strncat(enum_name, "32", sizeof(enum_name) / sizeof(*enum_name));
-        }
-
-    // Uses same enum name as AF_FORMAT_S32 for multichannel playback, while
-    // it is different for mono and stereo. OpenAL Soft does not support
-    // AF_FORMAT_S32 and seems to reuse the names.
-    case AF_FORMAT_FLOAT:
-        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE) {
-            if (channels > 2) {
-                strncat(enum_name, "32", sizeof(enum_name) / sizeof(*enum_name));
-            }
-            else {
-                strncat(enum_name, "_FLOAT32", sizeof(enum_name) / sizeof(*enum_name));
-            }
-        }
-        break;
+    else {
+        snprintf(enum_name, sizeof(enum_name) / sizeof(*enum_name),
+                 "AL_FORMAT_%s%s", channel_str[channels], format_str[format]);
     }
 
     if (alGetEnumValue((ALchar*)enum_name)) {
