@@ -188,7 +188,6 @@ static int init(struct ao *ao)
     float direction[6] = {0, 0, -1, 0, 1, 0};
     ALCdevice *dev = NULL;
     ALCcontext *ctx = NULL;
-    ALCint freq = 0;
     ALCint attribs[] = {ALC_FREQUENCY, ao->samplerate, 0, 0};
     struct priv *p = ao->priv;
     if (ao_data) {
@@ -226,10 +225,6 @@ static int init(struct ao *ao)
       eaxSetBufferMode = (EAXSetBufferMode)alGetProcAddress("EAXSetBufferMode");
       eaxSetBufferMode(p->num_buffers, buffers, alGetEnumValue("AL_STORAGE_HARDWARE"));
     }
-
-    alcGetIntegerv(dev, ALC_FREQUENCY, 1, &freq);
-    if (alcGetError(dev) == ALC_NO_ERROR && freq)
-        ao->samplerate = freq;
 
     // Check sample format
     int try_formats[AF_FORMAT_COUNT + 1];
