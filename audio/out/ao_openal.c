@@ -27,6 +27,10 @@
 
 #include "ao_loadopenal.h"
 
+ // X-RAM Function pointer definitions
+typedef ALboolean(AL_APIENTRY *EAXSetBufferMode)(ALsizei n, ALuint *buffers, ALint value);
+typedef ALenum(AL_APIENTRY *EAXGetBufferMode)(ALuint buffer, ALint *value);
+
 #include "common/msg.h"
 
 #include "ao.h"
@@ -54,6 +58,7 @@ struct priv {
     int num_buffers;
     int num_samples;
     int direct_channels;
+    int force_xram;
 };
 
 static void reset(struct ao *ao);
@@ -215,6 +220,13 @@ static int init(struct ao *ao)
     }
 
     oal.alGenBuffers(p->num_buffers, buffers);
+
+    if (oal.alIsExtensionPresent("EAX-RAM") && p->force_xram)
+    {
+      EAXSetBufferMode eaxSetBufferMode;
+      eaxSetBufferMode = (EAXSetBufferMode)oal.alGetProcAddress("EAXSetBufferMode");
+      eaxSetBufferMode(p->num_buffers, buffers, oal.alGetEnumValue("AL_STORAGE_HARDWARE"));
+    }
 
     oal.alcGetIntegerv(dev, ALC_FREQUENCY, 1, &freq);
     if (oal.alcGetError(dev) == ALC_NO_ERROR && freq)
@@ -429,11 +441,13 @@ const struct ao_driver audio_out_openal = {
         .num_buffers = 4,
         .num_samples = 8192,
         .direct_channels = 0,
+        .force_xram = 0,
     },
     .options = (const struct m_option[]) {
         OPT_INTRANGE("num-buffers", num_buffers, 0, 2, MAX_BUF),
         OPT_INTRANGE("num-samples", num_samples, 0, 256, MAX_SAMPLES),
         OPT_FLAG("direct-channels", direct_channels, 0),
+        OPT_FLAG("force-xram", force_xram, 0),
         {0}
     },
     .options_prefix = "openal",
