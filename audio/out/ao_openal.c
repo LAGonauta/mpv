@@ -24,19 +24,8 @@
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
-#ifndef WIN32
-#ifdef OPENAL_AL_H
-#include <OpenAL/alc.h>
-#include <OpenAL/al.h>
-#include <OpenAL/alext.h>
-#else
-#include <AL/alc.h>
-#include <AL/al.h>
-#include <AL/alext.h>
-#endif
-#endif // !WIN32
 
-
+#include "ao_loadopenal.h"
 
 #include "common/msg.h"
 
@@ -45,90 +34,6 @@
 #include "audio/format.h"
 #include "osdep/timer.h"
 #include "options/m_option.h"
-
-static HMODULE s_openal_dll = nullptr;
-
-#define OPENAL_API_VISIT(X)                                                                        \
-  X(alBufferData)                                                                                  \
-  X(alcCloseDevice)                                                                                \
-  X(alcCreateContext)                                                                              \
-  X(alcDestroyContext)                                                                             \
-  X(alcGetContextsDevice)                                                                          \
-  X(alcGetCurrentContext)                                                                          \
-  X(alcGetString)                                                                                  \
-  X(alcIsExtensionPresent)                                                                         \
-  X(alcMakeContextCurrent)                                                                         \
-  X(alcOpenDevice)                                                                                 \
-  X(alDeleteBuffers)                                                                               \
-  X(alDeleteSources)                                                                               \
-  X(alGenBuffers)                                                                                  \
-  X(alGenSources)                                                                                  \
-  X(alGetError)                                                                                    \
-  X(alGetSourcei)                                                                                  \
-  X(alGetString)                                                                                   \
-  X(alIsExtensionPresent)                                                                          \
-  X(alSourcef)                                                                                     \
-  X(alSourcei)                                                                                     \
-  X(alSourcePlay)                                                                                  \
-  X(alSourceQueueBuffers)                                                                          \
-  X(alSourceStop)                                                                                  \
-  X(alSourceUnqueueBuffers)                                                                        \
-  X(alGetEnumValue)                                                                                \
-  X(alIsSource)                                                                                    \
-  X(alGetSourcef)
-
-// Create func_t function pointer type and declare a nullptr-initialized static variable of that
-// type named "pfunc".
-#define DYN_FUNC_DECLARE(func)                                                                     \
-  typedef decltype(&func) func##_t;                                                                \
-  static func##_t p##func = nullptr;
-
-// Attempt to load the function from the given module handle.
-#define OPENAL_FUNC_LOAD(func)                                                                     \
-  p##func = (func##_t)::GetProcAddress(s_openal_dll, #func);                                       \
-  if (!p##func)                                                                                    \
-  {                                                                                                \
-    return false;                                                                                  \
-  }
-
-OPENAL_API_VISIT(DYN_FUNC_DECLARE);
-
-static bool InitFunctions()
-{
-  OPENAL_API_VISIT(OPENAL_FUNC_LOAD);
-  return true;
-}
-
-static bool InitLibrary()
-{
-  if (s_openal_dll)
-    return true;
-
-  s_openal_dll = ::LoadLibrary(TEXT("openal32.dll"));
-  if (!s_openal_dll)
-    return false;
-
-  if (!InitFunctions())
-  {
-    ::FreeLibrary(s_openal_dll);
-    s_openal_dll = nullptr;
-    return false;
-  }
-
-  return true;
-}
-
-static STDMETHODIMP isValid()
-{
-  if (InitLibrary())
-  {
-    return S_OK;
-  }
-  else
-  {
-    return E_FAIL;
-  }
-}
 
 #define MAX_CHANS MP_NUM_CHANNELS
 #define MAX_BUF 128
@@ -141,6 +46,8 @@ static int cur_buf;
 static int unqueue_buf;
 
 static struct ao *ao_data;
+
+static OPENALFNTABLE oal = { NULL };
 
 struct priv {
     ALenum al_format;
@@ -160,9 +67,9 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
         ao_control_vol_t *vol = (ao_control_vol_t *)arg;
         if (cmd == AOCONTROL_SET_VOLUME) {
             volume = (vol->left + vol->right) / 200.0;
-            palListenerf(AL_GAIN, volume);
+            oal.alListenerf(AL_GAIN, volume);
         }
-        palGetListenerf(AL_GAIN, &volume);
+        oal.alGetListenerf(AL_GAIN, &volume);
         vol->left = vol->right = volume * 100;
         return CONTROL_TRUE;
     }
@@ -174,9 +81,9 @@ static int control(struct ao *ao, enum aocontrol cmd, void *arg)
         // Thus reverse the muted state to get required gain
         ALfloat al_mute = (ALfloat)(!mute);
         if (cmd == AOCONTROL_SET_MUTE) {
-            palSourcef(source, AL_GAIN, al_mute);
+            oal.alSourcef(source, AL_GAIN, al_mute);
         }
-        palGetSourcef(source, AL_GAIN, &al_mute);
+        oal.alGetSourcef(source, AL_GAIN, &al_mute);
         *(bool *)arg = !((bool)al_mute);
         return CONTROL_TRUE;
     }
@@ -189,22 +96,22 @@ static enum af_format get_supported_format(int format)
 {
     switch (format) {
     case AF_FORMAT_U8:
-        if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO8"))
+        if (oal.alGetEnumValue((ALchar*)"AL_FORMAT_MONO8"))
             return AF_FORMAT_U8;
         break;
 
     case AF_FORMAT_S16:
-        if (alGetEnumValue((ALchar*)"AL_FORMAT_MONO16"))
+        if (oal.alGetEnumValue((ALchar*)"AL_FORMAT_MONO16"))
             return AF_FORMAT_S16;
         break;
 
     case AF_FORMAT_S32:
-        if (strstr(alGetString(AL_RENDERER), "X-Fi") != NULL)
+        if (strstr(oal.alGetString(AL_RENDERER), "X-Fi") != NULL)
             return AF_FORMAT_S32;
         break;
 
     case AF_FORMAT_FLOAT:
-        if (alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE)
+        if (oal.alIsExtensionPresent((ALchar*)"AL_EXT_float32") == AL_TRUE)
             return AF_FORMAT_FLOAT;
         break;
     }
@@ -239,8 +146,8 @@ static ALenum get_supported_layout(int format, int channels)
     snprintf(enum_name, sizeof(enum_name), "AL_FORMAT_%s%s", channel_str[channels],
              format_str[format]);
 
-    if (alGetEnumValue((ALchar*)enum_name)) {
-        return palGetEnumValue((ALchar*)enum_name);
+    if (oal.alGetEnumValue((ALchar*)enum_name)) {
+        return oal.alGetEnumValue((ALchar*)enum_name);
     }
     return AL_FALSE;
 }
@@ -249,24 +156,28 @@ static ALenum get_supported_layout(int format, int channels)
 static void uninit(struct ao *ao)
 {
     struct priv *p = ao->priv;
-    palSourceStop(source);
-    palSourcei(source, AL_BUFFER, 0);
+    oal.alSourceStop(source);
+    oal.alSourcei(source, AL_BUFFER, 0);
 
-    palDeleteBuffers(p->num_buffers, buffers);
-    palDeleteSources(1, &source);
+    oal.alDeleteBuffers(p->num_buffers, buffers);
+    oal.alDeleteSources(1, &source);
 
-    ALCcontext *ctx = palcGetCurrentContext();
-    ALCdevice *dev = palcGetContextsDevice(ctx);
-    palcMakeContextCurrent(NULL);
-    palcDestroyContext(ctx);
-    palcCloseDevice(dev);
+    ALCcontext *ctx = oal.alcGetCurrentContext();
+    ALCdevice *dev = oal.alcGetContextsDevice(ctx);
+    oal.alcMakeContextCurrent(NULL);
+    oal.alcDestroyContext(ctx);
+    oal.alcCloseDevice(dev);
     ao_data = NULL;
+    UnloadOAL10Library();
 }
 
 static int init(struct ao *ao)
 {
-    if (isValid() == E_FAIL)
+    if (LoadOAL10Library(NULL, &oal, ao) == FALSE)
+    {
+        MP_FATAL(ao, "Unable to load library!\n");
         return -1;
+    }
 
     float position[3] = {0, 0, 0};
     float direction[6] = {0, 0, -1, 0, 1, 0};
@@ -281,19 +192,20 @@ static int init(struct ao *ao)
     }
     ao_data = ao;
     char *dev_name = ao->device;
-    dev = palcOpenDevice(dev_name && dev_name[0] ? dev_name : NULL);
+    dev = oal.alcOpenDevice(dev_name && dev_name[0] ? dev_name : NULL);
     if (!dev) {
         MP_FATAL(ao, "could not open device\n");
         goto err_out;
     }
-    ctx = palcCreateContext(dev, attribs);
-    palcMakeContextCurrent(ctx);
-    palListenerfv(AL_POSITION, position);
-    palListenerfv(AL_ORIENTATION, direction);
 
-    palGenSources(1, &source);
-    if (p->direct_channels && palGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT")) {
-        palSourcei(source, palGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
+    ctx = oal.alcCreateContext(dev, attribs);
+    oal.alcMakeContextCurrent(ctx);
+    oal.alListenerfv(AL_POSITION, position);
+    oal.alListenerfv(AL_ORIENTATION, direction);
+
+    oal.alGenSources(1, &source);
+    if (p->direct_channels && oal.alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT")) {
+        oal.alSourcei(source, oal.alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
     }
 
     cur_buf = 0;
@@ -302,10 +214,10 @@ static int init(struct ao *ao)
         buffer_size[i] = 0;
     }
 
-    palGenBuffers(p->num_buffers, buffers);
+    oal.alGenBuffers(p->num_buffers, buffers);
 
-    palcGetIntegerv(dev, ALC_FREQUENCY, 1, &freq);
-    if (alcGetError(dev) == ALC_NO_ERROR && freq)
+    oal.alcGetIntegerv(dev, ALC_FREQUENCY, 1, &freq);
+    if (oal.alcGetError(dev) == ALC_NO_ERROR && freq)
         ao->samplerate = freq;
 
     // Check sample format
@@ -368,10 +280,10 @@ err_out:
 static void drain(struct ao *ao)
 {
     ALint state;
-    palGetSourcei(source, AL_SOURCE_STATE, &state);
+    oal.alGetSourcei(source, AL_SOURCE_STATE, &state);
     while (state == AL_PLAYING) {
         mp_sleep_us(10000);
-        palGetSourcei(source, AL_SOURCE_STATE, &state);
+        oal.alGetSourcei(source, AL_SOURCE_STATE, &state);
     }
 }
 
@@ -380,14 +292,14 @@ static void unqueue_buffers(struct ao *ao)
     struct priv *q = ao->priv;
     ALint p;
     int till_wrap = q->num_buffers - unqueue_buf;
-    palGetSourcei(source, AL_BUFFERS_PROCESSED, &p);
+    oal.alGetSourcei(source, AL_BUFFERS_PROCESSED, &p);
     if (p >= till_wrap) {
-        palSourceUnqueueBuffers(source, till_wrap, &buffers[unqueue_buf]);
+        oal.alSourceUnqueueBuffers(source, till_wrap, &buffers[unqueue_buf]);
         unqueue_buf = 0;
         p -= till_wrap;
     }
     if (p) {
-        palSourceUnqueueBuffers(source, p, &buffers[unqueue_buf]);
+        oal.alSourceUnqueueBuffers(source, p, &buffers[unqueue_buf]);
         unqueue_buf += p;
     }
 }
@@ -397,7 +309,7 @@ static void unqueue_buffers(struct ao *ao)
  */
 static void reset(struct ao *ao)
 {
-    palSourceStop(source);
+    oal.alSourceStop(source);
     unqueue_buffers(ao);
 }
 
@@ -406,7 +318,7 @@ static void reset(struct ao *ao)
  */
 static void audio_pause(struct ao *ao)
 {
-    palSourcePause(source);
+    oal.alSourcePause(source);
 }
 
 /**
@@ -414,7 +326,7 @@ static void audio_pause(struct ao *ao)
  */
 static void audio_resume(struct ao *ao)
 {
-    palSourcePlay(source);
+    oal.alSourcePlay(source);
 }
 
 static int get_space(struct ao *ao)
@@ -422,7 +334,7 @@ static int get_space(struct ao *ao)
     struct priv *p = ao->priv;
     ALint queued;
     unqueue_buffers(ao);
-    palGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
+    oal.alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
     queued = p->num_buffers - queued;
     if (queued < 0)
         return 0;
@@ -454,16 +366,16 @@ static int play(struct ao *ao, void **data, int samples, int flags)
             buffer_size[cur_buf] = p->num_samples;
         }
         d += i * buffer_size[cur_buf] * ao->sstride;
-        palBufferData(buffers[cur_buf], p->al_format, d,
+        oal.alBufferData(buffers[cur_buf], p->al_format, d,
             buffer_size[cur_buf] * ao->sstride, ao->samplerate);
-        palSourceQueueBuffers(source, 1, &buffers[cur_buf]);
+        oal.alSourceQueueBuffers(source, 1, &buffers[cur_buf]);
         cur_buf = (cur_buf + 1) % p->num_buffers;
     }
 
     ALint state;
-    palGetSourcei(source, AL_SOURCE_STATE, &state);
+    oal.alGetSourcei(source, AL_SOURCE_STATE, &state);
     if (state != AL_PLAYING) // checked here in case of an underrun
-        palSourcePlay(source);
+        oal.alSourcePlay(source);
 
     return buffered_samples;
 }
@@ -473,19 +385,19 @@ static double get_delay(struct ao *ao)
     struct priv *p = ao->priv;
     ALint queued;
     unqueue_buffers(ao);
-    palGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
+    oal.alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
 
     double soft_source_latency = 0;
-    if(alIsExtensionPresent("AL_SOFT_source_latency")) {
+    if(oal.alIsExtensionPresent("AL_SOFT_source_latency")) {
         ALdouble offsets[2];
-        LPALGETSOURCEDVSOFT palGetSourcedvSOFT = palGetProcAddress("alGetSourcedvSOFT");
-        palGetSourcedvSOFT(source, AL_SEC_OFFSET_LATENCY_SOFT, offsets);
+        LPALGETSOURCEDVSOFT alGetSourcedvSOFT = oal.alGetProcAddress("alGetSourcedvSOFT");
+        alGetSourcedvSOFT(source, AL_SEC_OFFSET_LATENCY_SOFT, offsets);
         // Additional latency to the play buffer, the remaining seconds to be
         // played minus the offset (seconds already played)
         soft_source_latency = offsets[1] - offsets[0];
     } else {
         float offset = 0;
-        palGetSourcef(source, AL_SEC_OFFSET, &offset);
+        oal.alGetSourcef(source, AL_SEC_OFFSET, &offset);
         soft_source_latency = -offset;
     }
 
