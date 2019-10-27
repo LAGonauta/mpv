@@ -41,7 +41,7 @@ typedef ALenum(AL_APIENTRY *EAXGetBufferMode)(ALuint buffer, ALint *value);
 
 #define MAX_CHANS MP_NUM_CHANNELS
 #define MAX_BUF 128
-#define MAX_SAMPLES 32768
+#define MAX_MILLISECONDS 60000
 static ALuint buffers[MAX_BUF];
 static ALuint buffer_size[MAX_BUF];
 static ALuint source;
@@ -56,7 +56,8 @@ static OPENALFNTABLE oal = { NULL };
 struct priv {
     ALenum al_format;
     int num_buffers;
-    int num_samples;
+    int num_frames;
+    int max_milliseconds;
     int direct_channels;
     int force_xram;
 };
@@ -190,6 +191,7 @@ static int init(struct ao *ao)
     ALCcontext *ctx = NULL;
     ALCint attribs[] = {ALC_FREQUENCY, ao->samplerate, 0, 0};
     struct priv *p = ao->priv;
+    p->num_frames = ao->samplerate / p->max_milliseconds / p->num_buffers / 1000;
     if (ao_data) {
         MP_FATAL(ao, "Not reentrant!\n");
         return -1;
@@ -276,7 +278,7 @@ static int init(struct ao *ao)
         goto err_out;
     }
 
-    ao->period_size = p->num_samples;
+    ao->period_size = p->num_frames;
     return 0;
 
 err_out:
@@ -345,7 +347,7 @@ static int get_space(struct ao *ao)
     queued = p->num_buffers - queued;
     if (queued < 0)
         return 0;
-    return p->num_samples * queued;
+    return p->num_frames * queued;
 }
 
 /**
@@ -361,8 +363,8 @@ static int play(struct ao *ao, void **data, int samples, int flags)
         num = 1;
         buffered_samples = samples;
     } else {
-        num = samples / p->num_samples;
-        buffered_samples = num * p->num_samples;
+        num = samples / p->num_frames;
+        buffered_samples = num * p->num_frames;
     }
 
     for (int i = 0; i < num; i++) {
@@ -370,7 +372,7 @@ static int play(struct ao *ao, void **data, int samples, int flags)
         if (flags & AOPLAY_FINAL_CHUNK) {
             buffer_size[cur_buf] = samples;
         } else {
-            buffer_size[cur_buf] = p->num_samples;
+            buffer_size[cur_buf] = p->num_frames;
         }
         d += i * buffer_size[cur_buf] * ao->sstride;
         oal.alBufferData(buffers[cur_buf], p->al_format, d,
@@ -434,13 +436,13 @@ const struct ao_driver audio_out_openal = {
     .priv_size = sizeof(struct priv),
     .priv_defaults = &(const struct priv) {
         .num_buffers = 4,
-        .num_samples = 8192,
+        .max_milliseconds = 128,
         .direct_channels = 0,
         .force_xram = 0,
     },
     .options = (const struct m_option[]) {
         OPT_INTRANGE("num-buffers", num_buffers, 0, 2, MAX_BUF),
-        OPT_INTRANGE("num-samples", num_samples, 0, 256, MAX_SAMPLES),
+        OPT_INTRANGE("max-buffered-milliseconds", max_milliseconds, 0, 8, MAX_MILLISECONDS),
         OPT_FLAG("direct-channels", direct_channels, 0),
         OPT_FLAG("force-xram", force_xram, 0),
         {0}
