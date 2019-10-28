@@ -191,7 +191,7 @@ static int init(struct ao *ao)
     ALCcontext *ctx = NULL;
     ALCint attribs[] = {ALC_FREQUENCY, ao->samplerate, 0, 0};
     struct priv *p = ao->priv;
-    p->num_frames = ao->samplerate / p->max_milliseconds / p->num_buffers / 1000;
+    p->num_frames = ao->samplerate * p->max_milliseconds / p->num_buffers / 1000;
     if (ao_data) {
         MP_FATAL(ao, "Not reentrant!\n");
         return -1;
