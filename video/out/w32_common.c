@@ -26,6 +26,7 @@
 #include <shobjidl.h>
 #include <avrt.h>
 
+#include "options/m_config.h"
 #include "options/options.h"
 #include "input/keycodes.h"
 #include "input/input.h"
@@ -74,6 +75,7 @@ struct vo_w32_state {
     struct mp_log *log;
     struct vo *vo;
     struct mp_vo_opts *opts;
+    struct m_config_cache *opts_cache;
     struct input_ctx *input_ctx;
 
     pthread_t thread;
@@ -839,7 +841,9 @@ static bool update_fullscreen_state(struct vo_w32_state *w32)
     }
 
     bool toggle_fs = w32->current_fs != new_fs;
-    w32->current_fs = new_fs;
+    w32->opts->fullscreen = w32->current_fs = new_fs;
+    m_config_cache_write_opt(w32->opts_cache,
+                             &w32->opts->fullscreen);
 
     if (toggle_fs) {
         if (w32->current_fs) {
@@ -987,6 +991,9 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
         }
 
         // Window may have been minimized or restored
+        w32->opts->window_minimized = IsIconic(w32->window);
+        m_config_cache_write_opt(w32->opts_cache,
+                                 &w32->opts->window_minimized);
         signal_events(w32, VO_EVENT_WIN_STATE);
 
         update_display_info(w32);
@@ -1047,7 +1054,7 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
             if (IsMaximized(w32->window) && w32->current_fs) {
                 w32->toggle_fs = true;
                 reinit_window_state(w32);
-                signal_events(w32, VO_EVENT_FULLSCREEN_STATE);
+
                 return 0;
             }
             break;
@@ -1074,11 +1081,12 @@ static LRESULT CALLBACK WndProc(HWND hWnd, UINT message, WPARAM wParam,
             return 0;
         }
 
-        // Handle all other WM_SYSKEYDOWN messages as WM_KEYDOWN
-    case WM_KEYDOWN:
         handle_key_down(w32, wParam, HIWORD(lParam));
         if (wParam == VK_F10)
             return 0;
+        break;
+    case WM_KEYDOWN:
+        handle_key_down(w32, wParam, HIWORD(lParam));
         break;
     case WM_SYSKEYUP:
     case WM_KEYUP:
@@ -1482,10 +1490,11 @@ int vo_w32_init(struct vo *vo)
     *w32 = (struct vo_w32_state){
         .log = mp_log_new(w32, vo->log, "win32"),
         .vo = vo,
-        .opts = vo->opts,
+        .opts_cache = m_config_cache_alloc(w32, vo->global, &vo_sub_opts),
         .input_ctx = vo->input_ctx,
         .dispatch = mp_dispatch_create(w32),
     };
+    w32->opts = w32->opts_cache->opts;
     vo->w32 = w32;
 
     if (pthread_create(&w32->thread, NULL, gui_thread, w32))
@@ -1560,20 +1569,26 @@ static char **get_disp_names(struct vo_w32_state *w32)
 static int gui_thread_control(struct vo_w32_state *w32, int request, void *arg)
 {
     switch (request) {
-    case VOCTRL_FULLSCREEN:
-        if (w32->opts->fullscreen != w32->current_fs)
-            reinit_window_state(w32);
+    case VOCTRL_VO_OPTS_CHANGED: {
+        void *changed_option;
+
+        while (m_config_cache_get_next_changed(w32->opts_cache,
+                                               &changed_option))
+        {
+            struct mp_vo_opts *vo_opts = w32->opts_cache->opts;
+
+            if (changed_option == &vo_opts->fullscreen) {
+                reinit_window_state(w32);
+            } else if (changed_option == &vo_opts->ontop) {
+                update_window_state(w32);
+            } else if (changed_option == &vo_opts->border) {
+                update_window_style(w32);
+                update_window_state(w32);
+            }
+        }
+
         return VO_TRUE;
-    case VOCTRL_ONTOP:
-        update_window_state(w32);
-        return VO_TRUE;
-    case VOCTRL_BORDER:
-        update_window_style(w32);
-        update_window_state(w32);
-        return VO_TRUE;
-    case VOCTRL_GET_FULLSCREEN:
-        *(bool *)arg = w32->current_fs;
-        return VO_TRUE;
+    }
     case VOCTRL_GET_UNFS_WINDOW_SIZE: {
         int *s = arg;
 
@@ -1600,9 +1615,6 @@ static int gui_thread_control(struct vo_w32_state *w32, int request, void *arg)
         reinit_window_state(w32);
         return VO_TRUE;
     }
-    case VOCTRL_GET_WIN_STATE:
-        *(int *)arg = IsIconic(w32->window) ? VO_WIN_STATE_MINIMIZED : 0;
-        return VO_TRUE;
     case VOCTRL_SET_CURSOR_VISIBILITY:
         w32->cursor_visible = *(bool *)arg;
 
