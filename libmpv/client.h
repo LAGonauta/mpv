@@ -142,6 +142,11 @@ extern "C" {
  *   wrapper script).
  * - Using UNIX IPC (off by default) will override the SIGPIPE signal handler,
  *   and set it to SIG_IGN.
+ * - mpv will reseed the legacy C random number generator by calling srand() at
+ *   some random point once.
+ * - mpv may start sub processes, so overriding SIGCHLD, or waiting on all PIDs
+ *   (such as calling wait()) by the parent process or any other library within
+ *   the process must be avoided. libmpv itself only waits for its own PIDs.
  *
  * Encoding of filenames
  * ---------------------
@@ -1005,6 +1010,11 @@ int mpv_command_string(mpv_handle *ctx, const char *args);
  * MPV_EVENT_COMMAND_REPLY event. This event will also have an
  * error code set if running the command failed. For commands that
  * return data, the data is put into mpv_event_command.result.
+ *
+ * The only case when you do not receive an event is when the function call
+ * itself fails. This happens only if parsing the command itself (or otherwise
+ * validating it) fails, i.e. the return code of the API call is not 0 or
+ * positive.
  *
  * Safe to be called from mpv render API threads.
  *

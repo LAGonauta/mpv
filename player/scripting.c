@@ -22,14 +22,19 @@
 #include <math.h>
 #include <pthread.h>
 #include <assert.h>
+#include <unistd.h>
 
 #include "config.h"
 
 #include "osdep/io.h"
+#include "osdep/subprocess.h"
 #include "osdep/threads.h"
 
 #include "common/common.h"
 #include "common/msg.h"
+#include "input/input.h"
+#include "options/m_config.h"
+#include "options/parse_configfile.h"
 #include "options/path.h"
 #include "misc/bstr.h"
 #include "core.h"
@@ -39,6 +44,7 @@
 extern const struct mp_scripting mp_scripting_lua;
 extern const struct mp_scripting mp_scripting_cplugin;
 extern const struct mp_scripting mp_scripting_js;
+extern const struct mp_scripting mp_scripting_run;
 
 static const struct mp_scripting *const scripting_backends[] = {
 #if HAVE_LUA
@@ -50,6 +56,7 @@ static const struct mp_scripting *const scripting_backends[] = {
 #if HAVE_JAVASCRIPT
     &mp_scripting_js,
 #endif
+    &mp_scripting_run,
     NULL
 };
 
@@ -74,73 +81,120 @@ static char *script_name_from_filename(void *talloc_ctx, const char *fname)
     return talloc_asprintf(talloc_ctx, "%s", name);
 }
 
-struct thread_arg {
-    struct mp_log *log;
-    const struct mp_scripting *backend;
-    mpv_handle *client;
-    const char *fname;
-};
-
-static void *script_thread(void *p)
+static void run_script(struct mp_script_args *arg)
 {
-    pthread_detach(pthread_self());
-
-    struct thread_arg *arg = p;
-
     char name[90];
     snprintf(name, sizeof(name), "%s (%s)", arg->backend->name,
              mpv_client_name(arg->client));
     mpthread_set_name(name);
 
-    if (arg->backend->load(arg->client, arg->fname) < 0)
-        MP_ERR(arg, "Could not load %s %s\n", arg->backend->name, arg->fname);
+    if (arg->backend->load(arg) < 0)
+        MP_ERR(arg, "Could not load %s %s\n", arg->backend->name, arg->filename);
 
     mpv_destroy(arg->client);
     talloc_free(arg);
+}
+
+static void *script_thread(void *p)
+{
+    pthread_detach(pthread_self());
+
+    struct mp_script_args *arg = p;
+    run_script(arg);
+
     return NULL;
 }
 
 static int mp_load_script(struct MPContext *mpctx, const char *fname)
 {
     char *ext = mp_splitext(fname, NULL);
+    if (ext && strcasecmp(ext, "disable") == 0)
+        return 0;
+
+    void *tmp = talloc_new(NULL);
+
+    const char *path = NULL;
+    char *script_name = NULL;
     const struct mp_scripting *backend = NULL;
-    for (int n = 0; scripting_backends[n]; n++) {
-        const struct mp_scripting *b = scripting_backends[n];
-        if (ext && strcasecmp(ext, b->file_ext) == 0) {
-            backend = b;
-            break;
+
+    struct stat s;
+    if (!stat(fname, &s) && S_ISDIR(s.st_mode)) {
+        path = fname;
+        fname = NULL;
+
+        for (int n = 0; scripting_backends[n]; n++) {
+            const struct mp_scripting *b = scripting_backends[n];
+            char *filename = mp_tprintf(80, "main.%s", b->file_ext);
+            fname = mp_path_join(tmp, path, filename);
+            if (!stat(fname, &s) && S_ISREG(s.st_mode)) {
+                backend = b;
+                break;
+            }
+            talloc_free((void *)fname);
+            fname = NULL;
         }
+
+        if (!fname) {
+            MP_ERR(mpctx, "Cannot find main.* for any supported scripting "
+                   "backend in: %s\n", path);
+            talloc_free(tmp);
+            return -1;
+        }
+
+        script_name = talloc_strdup(tmp, path);
+        mp_path_strip_trailing_separator(script_name);
+        script_name = mp_basename(script_name);
+    } else {
+        for (int n = 0; scripting_backends[n]; n++) {
+            const struct mp_scripting *b = scripting_backends[n];
+            if (ext && strcasecmp(ext, b->file_ext) == 0) {
+                backend = b;
+                break;
+            }
+        }
+        script_name = script_name_from_filename(tmp, fname);
     }
 
     if (!backend) {
-        MP_VERBOSE(mpctx, "Can't load unknown script: %s\n", fname);
+        MP_ERR(mpctx, "Can't load unknown script: %s\n", fname);
+        talloc_free(tmp);
         return -1;
     }
 
-    struct thread_arg *arg = talloc_ptrtype(NULL, arg);
-    char *name = script_name_from_filename(arg, fname);
-    *arg = (struct thread_arg){
-        .fname = talloc_strdup(arg, fname),
+    struct mp_script_args *arg = talloc_ptrtype(NULL, arg);
+    *arg = (struct mp_script_args){
+        .mpctx = mpctx,
+        .filename = talloc_strdup(arg, fname),
+        .path = talloc_strdup(arg, path),
         .backend = backend,
         // Create the client before creating the thread; otherwise a race
         // condition could happen, where MPContext is destroyed while the
         // thread tries to create the client.
-        .client = mp_new_client(mpctx->clients, name),
+        .client = mp_new_client(mpctx->clients, script_name),
     };
+
+    talloc_free(tmp);
+
     if (!arg->client) {
+        MP_ERR(mpctx, "Failed to create client for script: %s\n", fname);
         talloc_free(arg);
         return -1;
     }
+
     mp_client_set_weak(arg->client);
     arg->log = mp_client_get_log(arg->client);
 
     MP_DBG(arg, "Loading %s %s...\n", backend->name, fname);
 
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, script_thread, arg)) {
-        mpv_destroy(arg->client);
-        talloc_free(arg);
-        return -1;
+    if (backend->no_thread) {
+        run_script(arg);
+    } else {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, script_thread, arg)) {
+            mpv_destroy(arg->client);
+            talloc_free(arg);
+            return -1;
+        }
     }
 
     return 0;
@@ -170,10 +224,12 @@ static char **list_script_files(void *talloc_ctx, char *path)
         return NULL;
     struct dirent *ep;
     while ((ep = readdir(dp))) {
-        char *fname = mp_path_join(talloc_ctx, path, ep->d_name);
-        struct stat s;
-        if (!stat(fname, &s) && S_ISREG(s.st_mode))
-            MP_TARRAY_APPEND(talloc_ctx, files, count, fname);
+        if (ep->d_name[0] != '.') {
+            char *fname = mp_path_join(talloc_ctx, path, ep->d_name);
+            struct stat s;
+            if (!stat(fname, &s) && (S_ISREG(s.st_mode) || S_ISDIR(s.st_mode)))
+                MP_TARRAY_APPEND(talloc_ctx, files, count, fname);
+        }
     }
     closedir(dp);
     if (files)
@@ -211,16 +267,18 @@ void mp_load_builtin_scripts(struct MPContext *mpctx)
     load_builtin_script(mpctx, mpctx->opts->lua_load_console, "@console.lua");
 }
 
-void mp_load_scripts(struct MPContext *mpctx)
+bool mp_load_scripts(struct MPContext *mpctx)
 {
+    bool ok = true;
+
     // Load scripts from options
     char **files = mpctx->opts->script_files;
     for (int n = 0; files && files[n]; n++) {
         if (files[n][0])
-            mp_load_user_script(mpctx, files[n]);
+            ok &= mp_load_user_script(mpctx, files[n]) >= 0;
     }
     if (!mpctx->opts->auto_load_scripts)
-        return;
+        return ok;
 
     // Load all scripts
     void *tmp = talloc_new(NULL);
@@ -228,9 +286,11 @@ void mp_load_scripts(struct MPContext *mpctx)
     for (int i = 0; scriptsdir && scriptsdir[i]; i++) {
         files = list_script_files(tmp, scriptsdir[i]);
         for (int n = 0; files && files[n]; n++)
-            mp_load_script(mpctx, files[n]);
+            ok &= mp_load_script(mpctx, files[n]) >= 0;
     }
     talloc_free(tmp);
+
+    return ok;
 }
 
 #if HAVE_CPLUGINS
@@ -240,10 +300,9 @@ void mp_load_scripts(struct MPContext *mpctx)
 #define MPV_DLOPEN_FN "mpv_open_cplugin"
 typedef int (*mpv_open_cplugin)(mpv_handle *handle);
 
-static int load_cplugin(struct mpv_handle *client, const char *fname)
+static int load_cplugin(struct mp_script_args *args)
 {
-    MPContext *ctx = mp_client_get_core(client);
-    void *lib = dlopen(fname, RTLD_NOW | RTLD_LOCAL);
+    void *lib = dlopen(args->filename, RTLD_NOW | RTLD_LOCAL);
     if (!lib)
         goto error;
     // Note: once loaded, we never unload, as unloading the libraries linked to
@@ -251,11 +310,11 @@ static int load_cplugin(struct mpv_handle *client, const char *fname)
     mpv_open_cplugin sym = (mpv_open_cplugin)dlsym(lib, MPV_DLOPEN_FN);
     if (!sym)
         goto error;
-    return sym(client) ? -1 : 0;
+    return sym(args->client) ? -1 : 0;
 error: ;
     char *err = dlerror();
     if (err)
-        MP_ERR(ctx, "C plugin error: '%s'\n", err);
+        MP_ERR(args, "C plugin error: '%s'\n", err);
     return -1;
 }
 
@@ -266,3 +325,61 @@ const struct mp_scripting mp_scripting_cplugin = {
 };
 
 #endif
+
+static int load_run(struct mp_script_args *args)
+{
+    // The arg->client object might die and with it args->log, so duplicate it.
+    args->log = mp_log_new(args, args->log, NULL);
+
+    int fds[2];
+    if (!mp_ipc_start_anon_client(args->mpctx->ipc_ctx, args->client, fds))
+        return -1;
+    args->client = NULL; // ownership lost
+
+    // Hardcode them (according to opts.fds[]), because we want to allow clients
+    // to hardcode them if they want. Sue me.
+    char *fdopt = fds[1] >= 0 ? "--mpv-ipc-fd=3:4"
+                              : "--mpv-ipc-fd=3";
+
+    struct mp_subprocess_opts opts = {
+        .exe = (char *)args->filename,
+        .args = (char *[]){(char *)args->filename, fdopt, NULL},
+        .fds = {
+            // Keep terminal stuff
+            {.fd = 0, .src_fd = 0,},
+            {.fd = 1, .src_fd = 1,},
+            {.fd = 2, .src_fd = 2,},
+            // Just hope these don't step over each other (e.g. fds[1] is not
+            // below 4, if the std FDs are missing).
+            {.fd = 3, .src_fd = fds[0], },
+            {.fd = 4, .src_fd = fds[1], },
+        },
+        .num_fds = fds[1] >= 0 ? 4 : 5,
+        .detach = true,
+    };
+    struct mp_subprocess_result res;
+    mp_subprocess2(&opts, &res);
+
+    // Closing these will (probably) make the client exit, if it really died.
+    // They _should_ be CLOEXEC, but are not, because
+    // posix_spawn_file_actions_adddup2() may not clear the CLOEXEC flag
+    // properly if by coincidence fd==src_fd.
+    close(fds[0]);
+    if (fds[1] >= 0)
+        close(fds[1]);
+
+    if (res.error < 0) {
+        MP_ERR(args, "Starting '%s' failed: %s\n", args->filename,
+               mp_subprocess_err_str(res.error));
+        return -1;
+    }
+
+    return 0;
+}
+
+const struct mp_scripting mp_scripting_run = {
+    .name = "spawned IPC process",
+    .file_ext = "run",
+    .no_thread = true,
+    .load = load_run,
+};

@@ -28,7 +28,6 @@ class CocoaCB: NSObject {
     var layer: VideoLayer?
     var link: CVDisplayLink?
 
-    var cursorHidden: Bool = false
     var cursorVisibilityWanted: Bool = true
     @objc var isShuttingDown: Bool = false
 
@@ -129,10 +128,18 @@ class CocoaCB: NSObject {
 
         titleBar = TitleBar(frame: wr, window: window, cocoaCB: self)
 
+        let minimized = Bool(opts.window_minimized)
         window.isRestorable = false
         window.isReleasedWhenClosed = false
+        window.setMaximized(minimized ? false : Bool(opts.window_maximized))
+        window.setMinimized(minimized)
         window.makeMain()
-        window.makeKeyAndOrderFront(nil)
+        window.makeKey()
+
+        if !minimized {
+            window.orderFront(nil)
+        }
+
         NSApp.activate(ignoringOtherApps: true)
 
         if Bool(opts.fullscreen) {
@@ -166,7 +173,9 @@ class CocoaCB: NSObject {
     }
 
     func setAppIcon() {
-        if let app = NSApp as? Application {
+        if let app = NSApp as? Application,
+            ProcessInfo.processInfo.environment["MPVBUNDLE"] != "true"
+        {
             NSApp.applicationIconImage = app.getMPVIcon()
         }
     }
@@ -265,19 +274,12 @@ class CocoaCB: NSObject {
             &displaySleepAssertion)
     }
 
-    func updateCusorVisibility() {
+    func updateCursorVisibility() {
         setCursorVisiblility(cursorVisibilityWanted)
     }
 
     func setCursorVisiblility(_ visible: Bool) {
-        let visibility = visible ? true : !(view?.canHideCursor() ?? false)
-        if visibility && cursorHidden {
-            NSCursor.unhide()
-            cursorHidden = false;
-        } else if !visibility && !cursorHidden {
-            NSCursor.hide()
-            cursorHidden = true
-        }
+        NSCursor.setHiddenUntilMouseMoves(!visible && (view?.canHideCursor() ?? false))
     }
 
     func updateICCProfile() {
@@ -361,7 +363,7 @@ class CocoaCB: NSObject {
             let displayID = ccb.window?.screen?.displayID ?? display
 
             if displayID == display {
-                ccb.libmpv.sendVerbose("Detected display mode change, updating screen refresh rate");
+                ccb.libmpv.sendVerbose("Detected display mode change, updating screen refresh rate")
                 ccb.flagEvents(VO_EVENT_WIN_STATE)
             }
         }
@@ -496,7 +498,7 @@ class CocoaCB: NSObject {
                              ccb.getTargetScreen(forFullscreen: false)?.backingScaleFactor ??
                              NSScreen.main?.backingScaleFactor ?? 1.0
                 scaleFactor.pointee = Double(factor)
-                return VO_TRUE;
+                return VO_TRUE
             }
             return VO_FALSE
         case VOCTRL_RESTORE_SCREENSAVER:
@@ -545,7 +547,8 @@ class CocoaCB: NSObject {
         case VOCTRL_UPDATE_WINDOW_TITLE:
             if let titleData = data?.assumingMemoryBound(to: Int8.self) {
                 DispatchQueue.main.async {
-                    ccb.title = String(cString: titleData)
+                    let title = NSString(utf8String: titleData) as String?
+                    ccb.title = title ?? "Unknown Title"
                 }
                 return VO_TRUE
             }
@@ -572,6 +575,7 @@ class CocoaCB: NSObject {
         }
         if isShuttingDown { return }
 
+        uninit()
         setCursorVisiblility(true)
         stopDisplaylink()
         uninitLightSensor()

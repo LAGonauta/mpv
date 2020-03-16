@@ -230,6 +230,8 @@ enum playback_status {
     STATUS_EOF,         // playback has ended, or is disabled
 };
 
+const char *mp_status_str(enum playback_status st);
+
 #define NUM_PTRACKS 2
 
 typedef struct MPContext {
@@ -369,10 +371,8 @@ typedef struct MPContext {
     /* timestamp of video frame currently visible on screen
      * (or at least queued to be flipped by VO) */
     double video_pts;
+    // Last seek target.
     double last_seek_pts;
-    // As video_pts, but is not reset when seeking away. (For the very short
-    // period of time until a new frame is decoded and shown.)
-    double last_vo_pts;
     // Frame duration field from demuxer. Only used for duration of the last
     // video frame.
     double last_frame_duration;
@@ -408,10 +408,6 @@ typedef struct MPContext {
 
     struct seek_params seek;
 
-    // Can be temporarily set to an external audio track after seeks. Then it
-    // must be seeked to the video position once video is done seeking.
-    struct track *seek_slave;
-
     /* Heuristic for relative chapter seeks: keep track which chapter
      * the user wanted to go to, even if we aren't exactly within the
      * boundaries of that chapter due to an inaccurate seek. */
@@ -432,6 +428,7 @@ typedef struct MPContext {
     bool demux_underrun;
     double cache_stop_time;
     int cache_buffer;
+    double cache_update_pts;
 
     // Set after showing warning about decoding being too slow for realtime
     // playback rate. Used to avoid showing it multiple times.
@@ -619,12 +616,21 @@ void update_screensaver_state(struct MPContext *mpctx);
 void update_ab_loop_clip(struct MPContext *mpctx);
 
 // scripting.c
+struct mp_script_args {
+    const struct mp_scripting *backend;
+    struct MPContext *mpctx;
+    struct mp_log *log;
+    struct mpv_handle *client;
+    const char *filename;
+    const char *path;
+};
 struct mp_scripting {
     const char *name;       // e.g. "lua script"
     const char *file_ext;   // e.g. "lua"
-    int (*load)(struct mpv_handle *client, const char *filename);
+    bool no_thread;         // don't run load() on dedicated thread
+    int (*load)(struct mp_script_args *args);
 };
-void mp_load_scripts(struct MPContext *mpctx);
+bool mp_load_scripts(struct MPContext *mpctx);
 void mp_load_builtin_scripts(struct MPContext *mpctx);
 int mp_load_user_script(struct MPContext *mpctx, const char *fname);
 

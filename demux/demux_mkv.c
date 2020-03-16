@@ -20,6 +20,7 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
+#include <float.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <inttypes.h>
@@ -230,10 +231,10 @@ const struct m_sub_options demux_mkv_conf = {
     .opts = (const m_option_t[]) {
         OPT_CHOICE("subtitle-preroll", subtitle_preroll, 0,
                    ({"no", 0}, {"yes", 1}, {"index", 2})),
-        OPT_DOUBLE("subtitle-preroll-secs", subtitle_preroll_secs,
-                   M_OPT_MIN, .min = 0),
-        OPT_DOUBLE("subtitle-preroll-secs-index", subtitle_preroll_secs_index,
-                   M_OPT_MIN, .min = 0),
+        OPT_DOUBLE("subtitle-preroll-secs", subtitle_preroll_secs, 0,
+                   .min = 0, .max = DBL_MAX),
+        OPT_DOUBLE("subtitle-preroll-secs-index", subtitle_preroll_secs_index, 0,
+                   .min = 0, .max = DBL_MAX),
         OPT_CHOICE("probe-video-duration", probe_duration, 0,
                    ({"no", 0}, {"yes", 1}, {"full", 2})),
         OPT_FLAG("probe-start-time", probe_start_time, 0),
@@ -244,6 +245,7 @@ const struct m_sub_options demux_mkv_conf = {
         .subtitle_preroll = 2,
         .subtitle_preroll_secs = 1.0,
         .subtitle_preroll_secs_index = 10.0,
+        .probe_start_time = 1,
     },
 };
 
@@ -3211,7 +3213,7 @@ static void probe_first_timestamp(struct demuxer *demuxer)
 
     demuxer->start_time = mkv_d->cluster_tc / 1e9;
 
-    if (demuxer->start_time > 0)
+    if (demuxer->start_time)
         MP_VERBOSE(demuxer, "Start PTS: %f\n", demuxer->start_time);
 }
 

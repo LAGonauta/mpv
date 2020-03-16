@@ -18,6 +18,7 @@
 #ifndef MPLAYER_M_OPTION_H
 #define MPLAYER_M_OPTION_H
 
+#include <float.h>
 #include <string.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -37,12 +38,12 @@ struct mpv_global;
 ///////////////////////////// Options types declarations ////////////////////
 
 // Simple types
+extern const m_option_type_t m_option_type_bool;
 extern const m_option_type_t m_option_type_flag;
 extern const m_option_type_t m_option_type_dummy_flag;
 extern const m_option_type_t m_option_type_int;
 extern const m_option_type_t m_option_type_int64;
 extern const m_option_type_t m_option_type_byte_size;
-extern const m_option_type_t m_option_type_intpair;
 extern const m_option_type_t m_option_type_float;
 extern const m_option_type_t m_option_type_double;
 extern const m_option_type_t m_option_type_string;
@@ -128,10 +129,6 @@ struct m_obj_desc {
     bool hidden;
     // Callback to print custom help if "vf=entry=help" is passed
     void (*print_help)(struct mp_log *log);
-    // Callback that allows you to override the static default values. The
-    // pointer p points to the struct described by options/priv_size, with
-    // priv_defaults already applied. You can write to it to set any defaults.
-    void (*set_defaults)(struct mpv_global *global, void *p);
     // Set by m_obj_list_find(). If the requested name is an old alias, this
     // is set to the old name (while the name field uses the new name).
     const char *replaced_name;
@@ -224,17 +221,16 @@ struct m_sub_options {
 #define CONF_TYPE_OBJ_SETTINGS_LIST (&m_option_type_obj_settings_list)
 #define CONF_TYPE_TIME          (&m_option_type_time)
 #define CONF_TYPE_CHOICE        (&m_option_type_choice)
-#define CONF_TYPE_INT_PAIR      (&m_option_type_intpair)
 #define CONF_TYPE_NODE          (&m_option_type_node)
 
 // Possible option values. Code is allowed to access option data without going
 // through this union. It serves for self-documentation and to get minimal
 // size/alignment requirements for option values in general.
 union m_option_value {
+    bool bool_;
     int flag; // not the C type "bool"!
     int int_;
     int64_t int64;
-    int intpair[2];
     float float_;
     double double_;
     char *string;
@@ -358,6 +354,7 @@ struct m_option_type {
 // Option description
 struct m_option {
     // Option name.
+    // Option declarations can use this as positional field.
     const char *name;
 
     // Option type.
@@ -368,13 +365,14 @@ struct m_option {
 
     int offset;
 
-    // \brief Mostly useful for numeric types, the \ref M_OPT_MIN flags must
-    // also be set.
-    double min;
-
-    // \brief Mostly useful for numeric types, the \ref M_OPT_MAX flags must
-    // also be set.
-    double max;
+    // Most numeric types restrict the range to [min, max] if min<max (this
+    // implies that if min/max are not set, the full range is used). In all
+    // cases, the actual range is clamped to the type's native range.
+    // Float types use [DBL_MIN, DBL_MAX], though by setting min or max to
+    // -/+INFINITY, the range can be extended to INFINITY. (This part is buggy
+    // for "float".)
+    // Some types will abuse the min or max field for unrelated things.
+    double min, max;
 
     // Type dependent data (for all kinds of extended settings).
     void *priv;
@@ -388,15 +386,6 @@ struct m_option {
 };
 
 char *format_file_size(int64_t size);
-
-// The option has a minimum set in \ref m_option::min.
-#define M_OPT_MIN               (1 << 0)
-
-// The option has a maximum set in \ref m_option::max.
-#define M_OPT_MAX               (1 << 1)
-
-// The option has a minimum and maximum in m_option::min and m_option::max.
-#define M_OPT_RANGE             (M_OPT_MIN | M_OPT_MAX)
 
 // The option is forbidden in config files.
 #define M_OPT_NOCFG             (1 << 2)
@@ -417,6 +406,7 @@ char *format_file_size(int64_t size);
 // certain groups of options.
 #define UPDATE_OPT_FIRST        (1 << 8)
 #define UPDATE_TERM             (1 << 8)  // terminal options
+#define UPDATE_SUB_FILT         (1 << 9)  // subtitle filter options
 #define UPDATE_OSD              (1 << 10) // related to OSD rendering
 #define UPDATE_BUILTIN_SCRIPTS  (1 << 11) // osc/ytdl/stats
 #define UPDATE_IMGPAR           (1 << 12) // video image params overrides
@@ -442,9 +432,6 @@ char *format_file_size(int64_t size);
 #define M_OPT_OPTIONAL_PARAM    (1 << 30)
 
 // These are kept for compatibility with older code.
-#define CONF_MIN                M_OPT_MIN
-#define CONF_MAX                M_OPT_MAX
-#define CONF_RANGE              M_OPT_RANGE
 #define CONF_NOCFG              M_OPT_NOCFG
 #define CONF_PRE_PARSE          M_OPT_PRE_PARSE
 
@@ -460,6 +447,9 @@ char *format_file_size(int64_t size);
 // values are from a fixed set, although other types of values like numbers
 // might be allowed too). E.g. m_option_type_choice and m_option_type_flag.
 #define M_OPT_TYPE_CHOICE               (1 << 1)
+
+// When m_option.min/max are set, they denote a value range.
+#define M_OPT_TYPE_USES_RANGE           (1 << 2)
 
 ///////////////////////////// Parser flags /////////////////////////////////
 
@@ -600,6 +590,10 @@ extern const char m_option_path_separator;
 
 #define OPT_HELPER_REMOVEPAREN(...) __VA_ARGS__
 
+#define OPTF_BOOL(field) \
+    .type = &m_option_type_bool, \
+    .offset = MP_CHECKED_OFFSETOF(OPT_BASE_STRUCT, field, bool),
+
 /* The OPT_SOMETHING->OPT_SOMETHING_ kind of redirection exists to
  * make the code fully standard-conforming: the C standard requires that
  * __VA_ARGS__ has at least one argument (though GCC for example would accept
@@ -607,6 +601,7 @@ extern const char m_option_path_separator;
  * argument to ensure __VA_ARGS__ is not empty when calling the next macro.
  */
 
+// Note: new code should use OPTF_BOOL instead
 #define OPT_FLAG(...) \
     OPT_GENERAL(int, __VA_ARGS__, .type = &m_option_type_flag)
 
@@ -627,7 +622,7 @@ extern const char m_option_path_separator;
     OPT_GENERAL(int64_t, __VA_ARGS__, .type = &m_option_type_int64)
 
 #define OPT_RANGE_(ctype, optname, varname, flags, minval, maxval, ...) \
-    OPT_GENERAL(ctype, optname, varname, (flags) | CONF_RANGE,          \
+    OPT_GENERAL(ctype, optname, varname, flags,                         \
                 .min = minval, .max = maxval, __VA_ARGS__)
 
 #define OPT_INTRANGE(...) \
@@ -638,9 +633,6 @@ extern const char m_option_path_separator;
 
 #define OPT_DOUBLERANGE(...) \
     OPT_RANGE_(double, __VA_ARGS__, .type = &m_option_type_double)
-
-#define OPT_INTPAIR(...) \
-    OPT_GENERAL_NOTYPE(__VA_ARGS__, .type = &m_option_type_intpair)
 
 #define OPT_FLOAT(...) \
     OPT_GENERAL(float, __VA_ARGS__, .type = &m_option_type_float)
@@ -688,7 +680,7 @@ extern const char m_option_path_separator;
 // Union of choices and an int range. The choice values can be included in the
 // int range, or be completely separate - both works.
 #define OPT_CHOICE_OR_INT_(optname, varname, flags, minval, maxval, choices, ...) \
-    OPT_GENERAL(int, optname, varname, (flags) | CONF_RANGE,                      \
+    OPT_GENERAL(int, optname, varname, flags,                                     \
                 .min = minval, .max = maxval,                                     \
                 M_CHOICES(choices), __VA_ARGS__)
 #define OPT_CHOICE_OR_INT(...) \

@@ -196,7 +196,6 @@ static void uninit_demuxer(struct MPContext *mpctx)
         for (int t = 0; t < STREAM_TYPE_COUNT; t++)
             mpctx->current_track[r][t] = NULL;
     }
-    mpctx->seek_slave = NULL;
 
     talloc_free(mpctx->chapters);
     mpctx->chapters = NULL;
@@ -284,6 +283,8 @@ static void print_stream(struct MPContext *mpctx, struct track *t)
             APPEND(b, " %dHz", s->codec->samplerate);
     }
     APPEND(b, ")");
+    if (s->hls_bitrate > 0)
+        APPEND(b, " (%d kbps)", (s->hls_bitrate + 500) / 1000);
     if (t->is_external)
         APPEND(b, " (external)");
     MP_INFO(mpctx, "%s\n", b);
@@ -371,8 +372,6 @@ void reselect_demux_stream(struct MPContext *mpctx, struct track *track)
             pts -= 10.0;
     }
     demuxer_select_track(track->demuxer, track->stream, pts, track->selected);
-    if (track == mpctx->seek_slave)
-        mpctx->seek_slave = NULL;
 }
 
 static void enable_demux_thread(struct MPContext *mpctx, struct demuxer *demux)
@@ -705,9 +704,6 @@ bool mp_remove_track(struct MPContext *mpctx, struct track *track)
 
     struct demuxer *d = track->demuxer;
 
-    if (mpctx->seek_slave == track)
-        mpctx->seek_slave = NULL;
-
     int index = 0;
     while (index < mpctx->num_tracks && mpctx->tracks[index] != track)
         index++;
@@ -935,7 +931,8 @@ static void process_hooks(struct MPContext *mpctx, char *name)
     while (!mp_hook_test_completion(mpctx, name)) {
         mp_idle(mpctx);
 
-        // We have no idea what blocks a hook, so just do a full abort.
+        // We have no idea what blocks a hook, so just do a full abort. This
+        // does nothing for hooks that happen outside of playback.
         if (mpctx->stop_play)
             mp_abort_playback_async(mpctx);
     }
@@ -1378,17 +1375,20 @@ static void play_current_file(struct MPContext *mpctx)
     double playback_start = -1e100;
 
     assert(mpctx->stop_play);
+    mpctx->stop_play = 0;
+
+    process_hooks(mpctx, "on_before_start_file");
+    if (mpctx->stop_play)
+        return;
 
     mp_notify(mpctx, MPV_EVENT_START_FILE, NULL);
 
     mp_cancel_reset(mpctx->playback_abort);
 
     mpctx->error_playing = MPV_ERROR_LOADING_FAILED;
-    mpctx->stop_play = 0;
     mpctx->filename = NULL;
     mpctx->shown_aframes = 0;
     mpctx->shown_vframes = 0;
-    mpctx->last_vo_pts = MP_NOPTS_VALUE;
     mpctx->last_chapter_seek = -2;
     mpctx->last_chapter_pts = MP_NOPTS_VALUE;
     mpctx->last_chapter = -2;
@@ -1403,7 +1403,8 @@ static void play_current_file(struct MPContext *mpctx)
     mpctx->last_seek_pts = 0.0;
     mpctx->seek = (struct seek_params){ 0 };
     mpctx->filter_root = mp_filter_create_root(mpctx->global);
-    mp_filter_root_set_wakeup_cb(mpctx->filter_root, mp_wakeup_core_cb, mpctx);
+    mp_filter_graph_set_wakeup_cb(mpctx->filter_root, mp_wakeup_core_cb, mpctx);
+    mp_filter_graph_set_max_run_time(mpctx->filter_root, 0.1);
 
     reset_playback_state(mpctx);
 
@@ -1618,12 +1619,12 @@ terminate_playback:
 
     update_core_idle_state(mpctx);
 
-    process_hooks(mpctx, "on_unload");
-
     if (mpctx->step_frames) {
         opts->pause = 1;
         m_config_notify_change_opt_ptr(mpctx->mconfig, &opts->pause);
     }
+
+    process_hooks(mpctx, "on_unload");
 
     close_recorder(mpctx);
 
@@ -1705,6 +1706,8 @@ terminate_playback:
     }
 
     assert(mpctx->stop_play);
+
+    process_hooks(mpctx, "on_after_end_file");
 }
 
 // Determine the next file to play. Note that if this function returns non-NULL,

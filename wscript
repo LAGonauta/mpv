@@ -206,27 +206,19 @@ main_dependencies = [
         'req': True,
         'fmsg': 'Unable to find pthreads support.'
     }, {
-        'name': 'gnuc',
-        'desc': 'GNU C extensions',
-        'func': check_statement([], "__GNUC__"),
-    }, {
-        'name': 'stdatomic',
-        'desc': 'stdatomic.h',
+        'name': '--stdatomic',
+        'desc': 'C11 stdatomic.h',
         'func': check_libs(['atomic'],
             check_statement('stdatomic.h',
                 'atomic_int_least64_t test = ATOMIC_VAR_INIT(123);'
-                'atomic_fetch_add(&test, 1)'))
+                'atomic_fetch_add(&test, 1)')),
+        'req': True,
+        'fmsg': 'C11 atomics are required; you may need a newer compiler',
     }, {
         # C11; technically we require C11, but aligned_alloc() is not in MinGW
         'name': 'aligned_alloc',
         'desc': 'C11 aligned_alloc()',
         'func': check_statement('stdlib.h', 'aligned_alloc(1, 1)'),
-    }, {
-        'name': 'atomics',
-        'desc': 'stdatomic.h support or slow emulation',
-        'func': check_true,
-        'req': True,
-        'deps': 'stdatomic || gnuc',
     }, {
         'name': 'librt',
         'desc': 'linking with -lrt',
@@ -282,10 +274,6 @@ iconv support use --disable-iconv.",
         'deps': 'glob-posix || glob-win32',
         'func': check_true,
     }, {
-        'name': 'fchmod',
-        'desc': 'fchmod()',
-        'func': check_statement('sys/stat.h', 'fchmod(0, 0)'),
-    }, {
         'name': 'vt.h',
         'desc': 'vt.h',
         'func': check_statement(['sys/vt.h', 'sys/ioctl.h'],
@@ -330,13 +318,6 @@ iconv support use --disable-iconv.",
         'deps': 'os-linux',
         'func': check_statement('sys/mman.h',
                                 'memfd_create("mpv", MFD_CLOEXEC | MFD_ALLOW_SEALING)')
-    }, {
-        'name': '--libsmbclient',
-        'desc': 'Samba support (makes mpv GPLv3)',
-        'deps': 'libdl && gpl',
-        'func': check_pkg_config('smbclient'),
-        'default': 'disable',
-        'module': 'input',
     }, {
         'name' : '--lua',
         'desc' : 'Lua',
@@ -434,69 +415,19 @@ iconv support use --disable-iconv.",
     }
 ]
 
-ffmpeg_pkg_config_checks = [
-    'libavutil',     '>= 56.12.100',
-    'libavcodec',    '>= 58.16.100',
-    'libavformat',   '>= 58.9.100',
-    'libswscale',    '>= 5.0.101',
-    'libavfilter',   '>= 7.14.100',
-    'libswresample', '>= 3.0.100',
-]
-libav_pkg_config_checks = [
-    'libavutil',     '>= 56.6.0',
-    'libavcodec',    '>= 58.8.0',
-    'libavformat',   '>= 58.1.0',
-    'libswscale',    '>= 5.0.0',
-    'libavfilter',   '>= 7.0.0',
-    'libavresample', '>= 4.0.0',
-]
-
-def check_ffmpeg_or_libav_versions():
-    def fn(ctx, dependency_identifier, **kw):
-        versions = ffmpeg_pkg_config_checks
-        if ctx.dependency_satisfied('libav'):
-            versions = libav_pkg_config_checks
-        return check_pkg_config(*versions)(ctx, dependency_identifier, **kw)
-    return fn
-
 libav_dependencies = [
     {
-        'name': 'libavcodec',
-        'desc': 'FFmpeg/Libav present',
-        'func': check_pkg_config('libavcodec'),
-        'req': True,
-        'fmsg': "FFmpeg/Libav development files not found.",
-    }, {
-        'name': 'libavutil',
-        'desc': 'FFmpeg/Libav libavutil present',
-        'func': check_pkg_config('libavutil'),
-        'req': True,
-        'fmsg': "FFmpeg/Libav libavutil not found.",
-    }, {
         'name': 'ffmpeg',
-        'desc': 'libav* is FFmpeg',
-        # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
-        'func': check_statement('libavcodec/version.h',
-                                'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? 1 : -1]',
-                                use='libavcodec'),
-    }, {
-        # This check should always result in the opposite of ffmpeg-*.
-        # Run it to make sure is_ffmpeg didn't fail for some other reason than
-        # the actual version check.
-        'name': 'libav',
-        'desc': 'libav* is Libav',
-        # FFmpeg <=> LIBAVUTIL_VERSION_MICRO>=100
-        'func': check_statement('libavcodec/version.h',
-                                'int x[LIBAVCODEC_VERSION_MICRO >= 100 ? -1 : 1]',
-                                use='libavcodec')
-    }, {
-        'name': 'libav-any',
-        'desc': 'Libav/FFmpeg library versions',
-        'deps': 'ffmpeg || libav',
-        'func': check_ffmpeg_or_libav_versions(),
+        'desc': 'FFmpeg library',
+        'func': check_pkg_config('libavutil',     '>= 56.12.100',
+                                 'libavcodec',    '>= 58.16.100',
+                                 'libavformat',   '>= 58.9.100',
+                                 'libswscale',    '>= 5.0.101',
+                                 'libavfilter',   '>= 7.14.100',
+                                 'libswresample', '>= 3.0.100'),
         'req': True,
         'fmsg': "Unable to find development files for some of the required \
-FFmpeg/Libav libraries. Git master is recommended."
+FFmpeg libraries. Git master is recommended."
     }, {
         'name': '--libavdevice',
         'desc': 'libavdevice',
@@ -561,7 +492,6 @@ audio_output_features = [
     }, {
         'name': '--audiounit',
         'desc': 'AudioUnit output for iOS',
-        'deps': 'atomics',
         'func': check_cc(
             fragment=load_fragment('audiounit.c'),
             framework_name=['Foundation', 'AudioToolbox'])
@@ -589,12 +519,6 @@ video_output_features = [
         'desc': 'DRM',
         'deps': 'vt.h',
         'func': check_pkg_config('libdrm', '>= 2.4.74'),
-    }, {
-        'name': '--drmprime',
-        'desc': 'DRM Prime ffmpeg support',
-        'func': check_statement('libavutil/pixfmt.h',
-                                'int i = AV_PIX_FMT_DRM_PRIME',
-                                use='libavutil')
     }, {
         'name': '--gbm',
         'desc': 'GBM',
@@ -811,6 +735,7 @@ video_output_features = [
         'name': '--rpi',
         'desc': 'Raspberry Pi support',
         'func': check_pkg_config('brcmegl'),
+        'default': 'disable',
     } , {
         'name': '--ios-gl',
         'desc': 'iOS OpenGL ES hardware decoding interop support',

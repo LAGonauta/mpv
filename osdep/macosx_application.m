@@ -62,6 +62,7 @@ const struct m_sub_options macos_conf = {
         OPT_CHOICE_OR_INT("macos-fs-animation-duration",
                           macos_fs_animation_duration, 0, 0, 1000,
                           ({"default", -1})),
+        OPT_FLAG("macos-force-dedicated-gpu", macos_force_dedicated_gpu, 0),
         OPT_CHOICE("cocoa-cb-sw-renderer", cocoa_cb_sw_renderer, 0,
                    ({"auto", -1}, {"no", 0}, {"yes", 1})),
         OPT_FLAG("cocoa-cb-10bit-context", cocoa_cb_10bit_context, 0),
@@ -98,15 +99,16 @@ static Application *mpv_shared_app(void)
 
 static void terminate_cocoa_application(void)
 {
-    [NSApp hide:NSApp];
-    [NSApp terminate:NSApp];
+    dispatch_async(dispatch_get_main_queue(), ^{
+        [NSApp hide:NSApp];
+        [NSApp terminate:NSApp];
+    });
 }
 
 @implementation Application
 @synthesize menuBar = _menu_bar;
 @synthesize openCount = _open_count;
 @synthesize cocoaCB = _cocoa_cb;
-@synthesize remoteCommandCenter = _remoteCommandCenter;
 
 - (void)sendEvent:(NSEvent *)event
 {
@@ -201,11 +203,6 @@ static const char macosx_icon[] =
     [_eventsResponder queueCommand:cmd];
 }
 
-- (void)handleMPKey:(int)key withMask:(int)mask
-{
-    [_eventsResponder handleMPKey:key withMask:mask];
-}
-
 - (void)stopMPV:(char *)cmd
 {
     if (![_eventsResponder queueCommand:cmd])
@@ -219,11 +216,6 @@ static const char macosx_icon[] =
             andSelector:@selector(handleQuitEvent:withReplyEvent:)
           forEventClass:kCoreEventClass
              andEventID:kAEQuitApplication];
-}
-
-- (void)applicationWillBecomeActive:(NSNotification *)notification
-{
-    [_remoteCommandCenter makeCurrent];
 }
 
 - (void)handleQuitEvent:(NSAppleEventDescriptor *)event
@@ -300,13 +292,6 @@ static void init_cocoa_application(bool regular)
     [NSApp setDelegate:NSApp];
     [NSApp setMenuBar:[[MenuBar alloc] init]];
 
-#if HAVE_MACOS_MEDIA_PLAYER
-    // 10.12.2 runtime availability check
-    if ([NSApp respondsToSelector:@selector(touchBar)]) {
-        [NSApp setRemoteCommandCenter:[[RemoteCommandCenter alloc] initWithApp:NSApp]];
-    }
-#endif
-
     // Will be set to Regular from cocoa_common during UI creation so that we
     // don't create an icon when playing audio only files.
     [NSApp setActivationPolicy: regular ?
@@ -317,18 +302,10 @@ static void init_cocoa_application(bool regular)
         // Because activation policy has just been set to behave like a real
         // application, that policy must be reset on exit to prevent, among
         // other things, the menubar created here from remaining on screen.
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSApp setActivationPolicy:NSApplicationActivationPolicyProhibited];
+        });
     });
-}
-
-static void macosx_redirect_output_to_logfile(const char *filename)
-{
-    NSAutoreleasePool *pool = [[NSAutoreleasePool alloc] init];
-    NSString *log_path = [NSHomeDirectory() stringByAppendingPathComponent:
-        [@"Library/Logs/" stringByAppendingFormat:@"%s.log", filename]];
-    freopen([log_path fileSystemRepresentation], "a", stdout);
-    freopen([log_path fileSystemRepresentation], "a", stderr);
-    [pool release];
 }
 
 static bool bundle_started_from_finder(char **argv)
@@ -374,7 +351,6 @@ int cocoa_main(int argc, char *argv[])
 
         if (bundle_started_from_finder(argv)) {
             setup_bundle(&argc, argv);
-            macosx_redirect_output_to_logfile("mpv");
             init_cocoa_application(true);
         } else {
             for (int i = 1; i < argc; i++)

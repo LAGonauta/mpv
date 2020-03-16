@@ -103,7 +103,7 @@ local state = {
     initREQ = false,                        -- is a re-init request pending?
     last_mouseX, last_mouseY,               -- last mouse position, to detect significant mouse movement
     message_text,
-    message_timeout,
+    message_hide_timer,
     fullscreen = false,
     tick_timer = nil,
     tick_last_time = 0,                     -- when the last tick() was run
@@ -907,12 +907,20 @@ function show_message(text, duration)
     text = string.gsub(text, "\n", "\\N")
 
     state.message_text = text
-    state.message_timeout = mp.get_time() + duration
+
+    if not state.message_hide_timer then
+        state.message_hide_timer = mp.add_timeout(0, request_tick)
+    end
+    state.message_hide_timer:kill()
+    state.message_hide_timer.timeout = duration
+    state.message_hide_timer:resume()
+    request_tick()
 end
 
 function render_message(ass)
-    if not(state.message_timeout == nil) and not(state.message_text == nil)
-        and state.message_timeout > mp.get_time() then
+    if state.message_hide_timer and state.message_hide_timer:is_enabled() and
+       state.message_text
+    then
         local _, lines = string.gsub(state.message_text, "\\N", "")
 
         local fontsize = tonumber(mp.get_property("options/osd-font-size"))
@@ -930,7 +938,6 @@ function render_message(ass)
         ass:append(style .. state.message_text)
     else
         state.message_text = nil
-        state.message_timeout = nil
     end
 end
 
@@ -1960,8 +1967,11 @@ function osc_init()
             local seekto = get_slider_value(element)
             if (element.state.lastseek == nil) or
                 (not (element.state.lastseek == seekto)) then
-                    mp.commandv("seek", seekto, "absolute-percent",
-                        user_opts.seekbarkeyframes and "keyframes" or "exact")
+                    local flags = "absolute-percent"
+                    if not user_opts.seekbarkeyframes then
+                        flags = flags .. "+exact"
+                    end
+                    mp.commandv("seek", seekto, flags)
                     element.state.lastseek = seekto
             end
 
@@ -2020,7 +2030,7 @@ function osc_init()
             -- probably not a network stream
             return ""
         end
-        local dmx_cache = mp.get_property_number("demuxer-cache-duration")
+        local dmx_cache = cache_state and cache_state["cache-duration"]
         local thresh = math.min(state.dmx_cache * 0.05, 5)  -- 5% or 5s
         if dmx_cache and math.abs(dmx_cache - state.dmx_cache) >= thresh then
             state.dmx_cache = dmx_cache

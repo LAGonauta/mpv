@@ -204,16 +204,17 @@ mp.create_osd_overlay = function create_osd_overlay(format) {
         z: 0,
 
         update: function ass_update() {
-            mp.command_native({
-                name: "osd-overlay",
-                format: this.format,
-                id: this.id,
-                data: this.data,
-                res_x: Math.round(this.res_x),
-                res_y: Math.round(this.res_y),
-                z: this.z,
-            });
-            return mp.last_error() ? undefined : true;
+            var cmd = {};  // shallow clone of `this', excluding methods
+            for (var k in this) {
+                if (typeof this[k] != "function")
+                    cmd[k] = this[k];
+            }
+
+            cmd.name = "osd-overlay";
+            cmd.res_x = Math.round(this.res_x);
+            cmd.res_y = Math.round(this.res_y);
+
+            return mp.command_native(cmd);
         },
 
         remove: function ass_remove() {
@@ -462,7 +463,9 @@ function process_timers() {
  - Module id supports mpv path enhancements, e.g. ~/foo, ~~/bar, ~~desktop/baz
  *********************************************************************/
 
-mp.module_paths = ["~~/scripts/modules.js"];  // global modules search paths
+mp.module_paths = [];  // global modules search paths
+if (mp.script_path !== undefined)  // loaded as a directory
+    mp.module_paths.push(mp.utils.join_path(mp.script_path, "modules"));
 
 // Internal meta top-dirs. Users should not rely on these names.
 var MODULES_META = "~~modules",
@@ -645,6 +648,7 @@ mp.options = { read_options: read_options };
 g.print = mp.msg.info;  // convenient alias
 mp.get_script_name = function() { return mp.script_name };
 mp.get_script_file = function() { return mp.script_file };
+mp.get_script_directory = function() { return mp.script_path };
 mp.get_time = function() { return mp.get_time_ms() / 1000 };
 mp.utils.getcwd = function() { return mp.get_property("working-directory") };
 mp.dispatch_event = dispatch_event;
@@ -740,3 +744,8 @@ g.mp_event_loop = function mp_event_loop() {
 };
 
 })(this)
+
+try {
+    // let the user extend us, e.g. for updating mp.module_paths
+    require("~~/.init");
+} catch(e) {}

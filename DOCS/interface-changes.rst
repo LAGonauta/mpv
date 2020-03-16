@@ -17,14 +17,35 @@ a large part of the user interface and APIs.
 
 Also see compatibility.rst.
 
-This document lists changes to them. New changes are added to the top.
+This document lists changes to them. New changes are added to the top. Usually,
+only incompatible or important changes are mentioned. New options/commands/etc.
+are not always listed.
 
 Interface changes
 =================
 
 ::
 
- --- mpv 0.31.1 ---
+ --- mpv 0.33.0 ---
+    - directories in ~/.mpv/scripts/ (or equivalent) now have special semantics
+      (see mpv Lua scripting docs)
+    - names starting with "." in ~/.mpv/scripts/ (or equivalent) are now ignored
+    - js modules: ~~/scripts/modules.js/ is no longer used, global paths can be
+      set with custom init (see docs), dir-scripts first look at <dir>/modules/
+    - the OSX bundle now logs to "~/Library/Logs/mpv.log" by default
+    - deprecate the --cache-secs option (once removed, the cache cannot be
+      limited by time anymore)
+    - remove deprecated legacy hook API ("hook-add", "hook-ack"). Use either the
+      libmpv API (mpv_hook_add(), mpv_hook_continue()), or the Lua scripting
+      wrappers (mp.add_hook()).
+    - improve how property change notifications are delivered on events and on
+      hooks. In particular, a hook event is only returned to a client after all
+      changes initiated before the hook point were delivered to the same client.
+      In addition, it should no longer happen that events and property change
+      notifications were interleaved in bad ways (it could happen that a
+      property notification delivered after an event contained a value that was
+      valid only before the event happened).
+ --- mpv 0.32.0 ---
     - change behavior when using legacy option syntax with options that start
       with two dashes (``--`` instead of a ``-``). Now, using the recommended
       syntax is required for options starting with ``--``, which means an option

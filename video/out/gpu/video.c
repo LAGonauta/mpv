@@ -292,6 +292,7 @@ struct gl_video {
     bool broken_frame; // temporary error state
 
     bool colorspace_override_warned;
+    bool correct_downscaling_warned;
 };
 
 static const struct gl_video_opts gl_video_opts_def = {
@@ -1290,8 +1291,11 @@ static void finish_pass_tex(struct gl_video *p, struct ra_tex **dst_tex,
 
     // If RA_CAP_PARALLEL_COMPUTE is set, try to prefer compute shaders
     // over fragment shaders wherever possible.
-    if (!p->pass_compute.active && (p->ra->caps & RA_CAP_PARALLEL_COMPUTE))
+    if (!p->pass_compute.active && (p->ra->caps & RA_CAP_PARALLEL_COMPUTE) &&
+        (*dst_tex)->params.storage_dst)
+    {
         pass_is_compute(p, 16, 16, true);
+    }
 
     if (p->pass_compute.active) {
         gl_sc_uniform_image2D_wo(p->sc, "out_image", *dst_tex);
@@ -3286,6 +3290,8 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
                     const struct ra_format *fmt = fbo.tex->params.format;
                     if (fmt->dummy_format)
                         fmt = p->fbo_format;
+                    if (!fmt->storable && p->fbo_format->storable)
+                        fmt = p->fbo_format; // to be on the safe side
                     bool r = ra_tex_resize(p->ra, p->log, &p->output_tex,
                                            fbo.tex->params.w, fbo.tex->params.h,
                                            fmt);
@@ -3707,6 +3713,12 @@ static void check_gl_features(struct gl_video *p)
                    "available! See your FBO format configuration!\n");
     }
 
+    if (have_compute && have_fbo && !p->fbo_format->storable) {
+        have_compute = false;
+        MP_WARN(p, "Force-disabling compute shaders as the chosen FBO format "
+                "is not storable! See your FBO format configuration!\n");
+    }
+
     if (!have_compute && p->opts.dither_algo == DITHER_ERROR_DIFFUSION) {
         MP_WARN(p, "Disabling error diffusion dithering because compute shader "
                    "was not supported. Fallback to dither=fruit instead.\n");
@@ -4010,6 +4022,16 @@ static void reinit_from_options(struct gl_video *p)
         MP_WARN(p, "Interpolation now requires enabling display-sync mode.\n"
                    "E.g.: --video-sync=display-resample\n");
         p->dsi_warned = true;
+    }
+
+    if (p->opts.correct_downscaling && !p->correct_downscaling_warned) {
+        const char *name = p->opts.scaler[SCALER_DSCALE].kernel.name;
+        if (!name)
+            name = p->opts.scaler[SCALER_SCALE].kernel.name;
+        if (!name || !strcmp(name, "bilinear")) {
+            MP_WARN(p, "correct-downscaling requires non-bilinear scaler.\n");
+            p->correct_downscaling_warned = true;
+        }
     }
 }
 

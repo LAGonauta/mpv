@@ -18,26 +18,35 @@
 #include <unistd.h>
 #include <xf86drm.h>
 #include <xf86drmMode.h>
+#include <drm_mode.h>
 
 #include "common/msg.h"
 #include "drm_common.h"
 #include "drm_prime.h"
 
-int drm_prime_create_framebuffer(struct mp_log *log, int fd, AVDRMFrameDescriptor *descriptor, int width, int height,
-                                  struct  drm_prime_framebuffer *framebuffer)
+int drm_prime_create_framebuffer(struct mp_log *log, int fd,
+                                 AVDRMFrameDescriptor *descriptor, int width,
+                                 int height, struct drm_prime_framebuffer *framebuffer,
+                                 struct drm_prime_handle_refs *handle_refs)
 {
     AVDRMLayerDescriptor *layer = NULL;
     uint32_t pitches[4], offsets[4], handles[4];
+    uint64_t modifiers[4];
     int ret, layer_fd;
 
     if (descriptor && descriptor->nb_layers) {
         *framebuffer = (struct drm_prime_framebuffer){0};
 
         for (int object = 0; object < descriptor->nb_objects; object++) {
-            ret = drmPrimeFDToHandle(fd, descriptor->objects[object].fd, &framebuffer->gem_handles[object]);
+            ret = drmPrimeFDToHandle(fd, descriptor->objects[object].fd,
+                                     &framebuffer->gem_handles[object]);
             if (ret < 0) {
-                mp_err(log, "Failed to retrieve the Prime Handle from handle %d (%d).\n", object, descriptor->objects[object].fd);
+                mp_err(log, "Failed to retrieve the Prime Handle from handle %d (%d).\n",
+                       object, descriptor->objects[object].fd);
                 goto fail;
+            }
+            if (object == 0) {
+                modifiers[object] = descriptor->objects[object].format_modifier;
             }
         }
 
@@ -49,20 +58,27 @@ int drm_prime_create_framebuffer(struct mp_log *log, int fd, AVDRMFrameDescripto
                 pitches[plane] = layer->planes[plane].pitch;
                 offsets[plane] = layer->planes[plane].offset;
                 handles[plane] = layer_fd;
+                modifiers[plane] = modifiers[0];
             } else {
                 pitches[plane] = 0;
                 offsets[plane] = 0;
                 handles[plane] = 0;
+                modifiers[plane] = 0;
             }
         }
 
-        ret = drmModeAddFB2(fd, width, height, layer->format,
-                            handles, pitches, offsets, &framebuffer->fb_id, 0);
+        ret = drmModeAddFB2WithModifiers(fd, width, height, layer->format,
+                                         handles, pitches, offsets,
+                                         modifiers, &framebuffer->fb_id,
+                                         DRM_MODE_FB_MODIFIERS);
         if (ret < 0) {
             mp_err(log, "Failed to create framebuffer on layer %d.\n", 0);
             goto fail;
         }
-    }
+        for (int plane = 0; plane < AV_DRM_MAX_PLANES; plane++) {
+            drm_prime_add_handle_ref(handle_refs, framebuffer->gem_handles[plane]);
+        }
+   }
 
    return 0;
 
@@ -71,15 +87,66 @@ fail:
    return -1;
 }
 
-void drm_prime_destroy_framebuffer(struct mp_log *log, int fd, struct  drm_prime_framebuffer *framebuffer)
+void drm_prime_destroy_framebuffer(struct mp_log *log, int fd,
+                                   struct drm_prime_framebuffer *framebuffer,
+                                   struct drm_prime_handle_refs *handle_refs)
 {
     if (framebuffer->fb_id)
         drmModeRmFB(fd, framebuffer->fb_id);
 
     for (int i = 0; i < AV_DRM_MAX_PLANES; i++) {
-        if (framebuffer->gem_handles[i])
-            drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &framebuffer->gem_handles[i]);
+        if (framebuffer->gem_handles[i]) {
+            drm_prime_remove_handle_ref(handle_refs,
+                                        framebuffer->gem_handles[i]);
+            if (!drm_prime_get_handle_ref_count(handle_refs,
+                                                framebuffer->gem_handles[i])) {
+                drmIoctl(fd, DRM_IOCTL_GEM_CLOSE, &framebuffer->gem_handles[i]);
+            }
+        }
     }
 
     memset(framebuffer, 0, sizeof(*framebuffer));
+}
+
+void drm_prime_init_handle_ref_count(void *talloc_parent,
+    struct drm_prime_handle_refs *handle_refs)
+{
+    handle_refs->handle_ref_count = talloc_zero(talloc_parent, uint32_t);
+    handle_refs->size = 1;
+    handle_refs->ctx = talloc_parent;
+}
+
+void drm_prime_add_handle_ref(struct drm_prime_handle_refs *handle_refs,
+                              uint32_t handle)
+{
+    if (handle) {
+        if (handle > handle_refs->size) {
+            handle_refs->size = handle;
+            MP_TARRAY_GROW(handle_refs->ctx, handle_refs->handle_ref_count,
+                           handle_refs->size);
+        }
+        handle_refs->handle_ref_count[handle - 1]++;
+    }
+}
+
+void drm_prime_remove_handle_ref(struct drm_prime_handle_refs *handle_refs,
+                                 uint32_t handle)
+{
+    if (handle) {
+        if (handle <= handle_refs->size &&
+             handle_refs->handle_ref_count[handle - 1])
+        {
+             handle_refs->handle_ref_count[handle - 1]--;
+        }
+    }
+}
+
+uint32_t drm_prime_get_handle_ref_count(struct drm_prime_handle_refs *handle_refs,
+                                        uint32_t handle)
+{
+    if (handle) {
+        if (handle <= handle_refs->size)
+            return handle_refs->handle_ref_count[handle - 1];
+    }
+    return 0;
 }

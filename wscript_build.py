@@ -301,6 +301,7 @@ def build(ctx):
         ( "demux/packet.c" ),
         ( "demux/timeline.c" ),
 
+        ( "filters/f_async_queue.c" ),
         ( "filters/f_autoconvert.c" ),
         ( "filters/f_auto_filters.c" ),
         ( "filters/f_decoder_wrapper.c" ),
@@ -339,7 +340,8 @@ def build(ctx):
         ( "misc/thread_tools.c" ),
 
         ## Options
-        ( "options/m_config.c" ),
+        ( "options/m_config_core.c" ),
+        ( "options/m_config_frontend.c" ),
         ( "options/m_option.c" ),
         ( "options/m_property.c" ),
         ( "options/options.c" ),
@@ -383,12 +385,12 @@ def build(ctx):
         ( "stream/stream_memory.c" ),
         ( "stream/stream_mf.c" ),
         ( "stream/stream_null.c" ),
-        ( "stream/stream_smb.c",                 "libsmbclient" ),
 
         ## Subtitles
         ( "sub/ass_mp.c",                        "libass"),
         ( "sub/dec_sub.c" ),
         ( "sub/draw_bmp.c" ),
+        ( "sub/filter_regex.c",                  "posix" ),
         ( "sub/filter_sdh.c" ),
         ( "sub/img_convert.c" ),
         ( "sub/lavc_conv.c" ),
@@ -404,6 +406,7 @@ def build(ctx):
         ( "test/img_format.c",                   "tests" ),
         ( "test/json.c",                         "tests" ),
         ( "test/linked_list.c",                  "tests" ),
+        ( "test/paths.c",                        "tests" ),
         ( "test/scale_sws.c",                    "tests" ),
         ( "test/scale_test.c",                   "tests" ),
         ( "test/scale_zimg.c",                   "tests && zimg" ),
@@ -445,7 +448,7 @@ def build(ctx):
         ( "video/out/dr_helper.c" ),
         ( "video/out/drm_atomic.c",              "drm" ),
         ( "video/out/drm_common.c",              "drm" ),
-        ( "video/out/drm_prime.c",               "drm && drmprime" ),
+        ( "video/out/drm_prime.c",               "drm" ),
         ( "video/out/filter_kernels.c" ),
         ( "video/out/gpu/context.c" ),
         ( "video/out/gpu/d3d11_helpers.c",       "d3d11 || egl-angle-win32" ),
@@ -486,7 +489,7 @@ def build(ctx):
         ( "video/out/opengl/egl_helpers.c",      "egl-helpers" ),
         ( "video/out/opengl/formats.c",          "gl" ),
         ( "video/out/opengl/hwdec_d3d11egl.c",   "d3d-hwaccel && egl-angle" ),
-        ( "video/out/opengl/hwdec_drmprime_drm.c","drmprime && drm" ),
+        ( "video/out/opengl/hwdec_drmprime_drm.c","drm" ),
         ( "video/out/opengl/hwdec_dxva2egl.c",   "d3d9-hwaccel && egl-angle" ),
         ( "video/out/opengl/hwdec_dxva2gldx.c",  "gl-dxinterop-d3d9" ),
         ( "video/out/opengl/hwdec_ios.m",        "ios-gl" ),
@@ -717,7 +720,7 @@ def build(ctx):
             PRIV_LIBS    = get_deps(),
         )
 
-        headers = ["client.h", "qthelper.hpp", "opengl_cb.h", "render.h",
+        headers = ["client.h", "opengl_cb.h", "render.h",
                    "render_gl.h", "stream_cb.h"]
         for f in headers:
             ctx.install_as(ctx.env.INCLUDEDIR + '/mpv/' + f, 'libmpv/' + f)

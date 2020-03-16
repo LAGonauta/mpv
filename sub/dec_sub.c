@@ -71,8 +71,6 @@ struct dec_sub {
     struct sd *sd;
 
     struct demux_packet *new_segment;
-
-    struct mp_dispatch_queue *demux_waiter;
 };
 
 static void update_subtitle_speed(struct dec_sub *sub)
@@ -172,7 +170,7 @@ static struct sd *init_decoder(struct dec_sub *sub)
 // Thread-safety of the returned object: all functions are thread-safe,
 // except sub_get_bitmaps() and sub_get_text(). Decoder backends (sd_*)
 // do not need to acquire locks.
-// Ownership of attachments goes to the caller, and is released with
+// Ownership of attachments goes to the callee, and is released with
 // talloc_free() (even on failure).
 struct dec_sub *sub_create(struct mpv_global *global, struct sh_stream *sh,
                            struct attachment_list *attachments)
@@ -192,12 +190,9 @@ struct dec_sub *sub_create(struct mpv_global *global, struct sh_stream *sh,
         .last_vo_pts = MP_NOPTS_VALUE,
         .start = MP_NOPTS_VALUE,
         .end = MP_NOPTS_VALUE,
-        .demux_waiter = mp_dispatch_create(sub),
     };
     sub->opts = sub->opts_cache->opts;
     mpthread_mutex_init_recursive(&sub->lock);
-
-    demux_set_stream_wakeup_cb(sub->sh, wakeup_demux, sub->demux_waiter);
 
     sub->sd = init_decoder(sub);
     if (sub->sd) {
@@ -251,13 +246,16 @@ void sub_preload(struct dec_sub *sub)
 {
     pthread_mutex_lock(&sub->lock);
 
+    struct mp_dispatch_queue *demux_waiter = mp_dispatch_create(NULL);
+    demux_set_stream_wakeup_cb(sub->sh, wakeup_demux, demux_waiter);
+
     sub->preload_attempted = true;
 
     for (;;) {
         struct demux_packet *pkt = NULL;
         int r = demux_read_packet_async(sub->sh, &pkt);
         if (r == 0) {
-            mp_dispatch_queue_process(sub->demux_waiter, INFINITY);
+            mp_dispatch_queue_process(demux_waiter, INFINITY);
             continue;
         }
         if (!pkt)
@@ -265,6 +263,9 @@ void sub_preload(struct dec_sub *sub)
         sub->sd->driver->decode(sub->sd, pkt);
         talloc_free(pkt);
     }
+
+    demux_set_stream_wakeup_cb(sub->sh, NULL, NULL);
+    talloc_free(demux_waiter);
 
     pthread_mutex_unlock(&sub->lock);
 }
@@ -299,13 +300,16 @@ bool sub_read_packets(struct dec_sub *sub, double video_pts)
         if (sub->new_segment)
             break;
 
+        // (Use this mechanism only if sub_delay matters to avoid corner cases.)
+        double min_pts = sub->opts->sub_delay < 0 ? video_pts : MP_NOPTS_VALUE;
+
         struct demux_packet *pkt;
-        int st = demux_read_packet_async(sub->sh, &pkt);
+        int st = demux_read_packet_async_until(sub->sh, min_pts, &pkt);
         // Note: "wait" (st==0) happens with non-interleaved streams only, and
         // then we should stop the playloop until a new enough packet has been
-        // seen (or the subtitle decoder's queue is full). This does not happen
-        // for interleaved subtitle streams, which never return "wait" when
-        // reading.
+        // seen (or the subtitle decoder's queue is full). This usually does not
+        // happen for interleaved subtitle streams, which never return "wait"
+        // when reading, unless min_pts is set.
         if (st <= 0) {
             r = st < 0 || (sub->last_pkt_pts != MP_NOPTS_VALUE &&
                            sub->last_pkt_pts > video_pts);
@@ -413,6 +417,7 @@ int sub_control(struct dec_sub *sub, enum sd_ctrl cmd, void *arg)
 {
     int r = CONTROL_UNKNOWN;
     pthread_mutex_lock(&sub->lock);
+    bool propagate = false;
     switch (cmd) {
     case SD_CTRL_SET_VIDEO_DEF_FPS:
         sub->video_fps = *(double *)arg;
@@ -427,21 +432,19 @@ int sub_control(struct dec_sub *sub, enum sd_ctrl cmd, void *arg)
         if (r == CONTROL_OK)
             a[0] = pts_from_subtitle(sub, arg2[0]);
         break;
+    case SD_CTRL_UPDATE_OPTS:
+        if (m_config_cache_update(sub->opts_cache))
+            update_subtitle_speed(sub);
+        propagate = true;
+        break;
     }
     default:
-        if (sub->sd->driver->control)
-            r = sub->sd->driver->control(sub->sd, cmd, arg);
+        propagate = true;
     }
+    if (propagate && sub->sd->driver->control)
+        r = sub->sd->driver->control(sub->sd, cmd, arg);
     pthread_mutex_unlock(&sub->lock);
     return r;
-}
-
-void sub_update_opts(struct dec_sub *sub)
-{
-    pthread_mutex_lock(&sub->lock);
-    if (m_config_cache_update(sub->opts_cache))
-        update_subtitle_speed(sub);
-    pthread_mutex_unlock(&sub->lock);
 }
 
 void sub_set_recorder_sink(struct dec_sub *sub, struct mp_recorder_sink *sink)

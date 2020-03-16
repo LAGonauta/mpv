@@ -183,7 +183,7 @@ class Window: NSWindow, NSWindowDelegate {
     func windowDidEnterFullScreen(_ notification: Notification) {
         isInFullscreen = true
         cocoaCB.mpv?.setConfigProperty(fullscreen: isInFullscreen)
-        cocoaCB.updateCusorVisibility()
+        cocoaCB.updateCursorVisibility()
         endAnimation(frame)
         cocoaCB.titleBar?.show()
     }
@@ -317,6 +317,11 @@ class Window: NSWindow, NSWindowDelegate {
     }
 
     override func setFrame(_ frameRect: NSRect, display flag: Bool) {
+        if frameRect.width < minSize.width || frameRect.height < minSize.height {
+            mpv?.sendVerbose("tried to set too small window size: \(frameRect.size)")
+            return
+        }
+
         super.setFrame(frameRect, display: flag)
 
         if let size = unfsContentFrame?.size, keepAspect {
@@ -332,7 +337,7 @@ class Window: NSWindow, NSWindowDelegate {
     }
 
     func aspectFit(rect r: NSRect, in rTarget: NSRect) -> NSRect {
-        var s = rTarget.width / r.width;
+        var s = rTarget.width / r.width
         if r.height*s > rTarget.height {
             s = rTarget.height / r.height
         }
@@ -456,6 +461,12 @@ class Window: NSWindow, NSWindowDelegate {
         mpv?.command("set window-scale \(scale)")
     }
 
+    func addWindowScale(_ scale: Double) {
+        if !isInFullscreen {
+            mpv?.command("add window-scale \(scale)")
+        }
+    }
+
     func windowDidChangeScreen(_ notification: Notification) {
         if screen == nil {
             return
@@ -506,12 +517,13 @@ class Window: NSWindow, NSWindowDelegate {
     }
 
     func windowDidBecomeKey(_ notification: Notification) {
-        cocoaCB.updateCusorVisibility()
+        cocoaCB.updateCursorVisibility()
     }
 
     func windowDidChangeOcclusionState(_ notification: Notification) {
         if occlusionState.contains(.visible) {
             cocoaCB.layer?.update(force: true)
+            cocoaCB.updateCursorVisibility()
         }
     }
 

@@ -13,7 +13,7 @@ typedef struct mp_vo_opts {
     int snap_window;
     int ontop;
     int ontop_level;
-    int fullscreen;
+    bool fullscreen;
     int border;
     int fit_border;
     int all_workspaces;
@@ -82,8 +82,6 @@ struct mp_subtitle_opts {
     float sub_scale;
     float sub_gauss;
     int sub_gray;
-    int sub_filter_SDH;
-    int sub_filter_SDH_harder;
     int ass_enabled;
     float ass_line_spacing;
     int ass_use_margins;
@@ -100,6 +98,14 @@ struct mp_subtitle_opts {
     int ass_justify;
     int sub_clear_on_seek;
     int teletext_page;
+};
+
+struct mp_sub_filter_opts {
+    int sub_filter_SDH;
+    int sub_filter_SDH_harder;
+    int rf_enable;
+    char **rf_items;
+    int rf_warn;
 };
 
 struct mp_osd_render_opts {
@@ -166,13 +172,8 @@ typedef struct MPOpts {
     int cursor_autohide_delay;
     int cursor_autohide_fs;
 
-    int video_rotate;
-
-    char *audio_decoders;
-    char *video_decoders;
-    char *audio_spdif;
-
     struct mp_subtitle_opts *subs_rend;
+    struct mp_sub_filter_opts *subs_filt;
     struct mp_osd_render_opts *osd_rend;
 
     int osd_level;
@@ -200,7 +201,6 @@ typedef struct MPOpts {
     int use_filedir_conf;
     int hls_bitrate;
     int edition_id;
-    int correct_pts;
     int initial_audio_sync;
     int video_sync;
     double sync_max_video_change;
@@ -232,6 +232,7 @@ typedef struct MPOpts {
     int rebase_start_time;
     int play_frames;
     double ab_loop[2];
+    int ab_loop_count;
     double step_sec;
     int position_resume;
     int position_check_mtime;
@@ -258,8 +259,6 @@ typedef struct MPOpts {
     int prefetch_open;
     char *audio_demuxer_name;
     char *sub_demuxer_name;
-    int64_t video_reverse_size;
-    int64_t audio_reverse_size;
 
     int cache_pause;
     int cache_pause_initial;
@@ -269,7 +268,6 @@ typedef struct MPOpts {
     char *screenshot_template;
     char *screenshot_directory;
 
-    double force_fps;
     int index_mode;
 
     struct m_channels audio_output_channels;
@@ -280,8 +278,7 @@ typedef struct MPOpts {
     struct m_obj_settings *vf_settings, *vf_defs;
     struct m_obj_settings *af_settings, *af_defs;
     struct filter_opts *filter_opts;
-    float movie_aspect;
-    int aspect_method;
+    struct dec_wrapper_opts *dec_wrapper;
     char **sub_name;
     char **sub_paths;
     char **audiofile_paths;
@@ -360,10 +357,12 @@ struct filter_opts {
 extern const struct m_sub_options vo_sub_opts;
 extern const struct m_sub_options dvd_conf;
 extern const struct m_sub_options mp_subtitle_sub_opts;
+extern const struct m_sub_options mp_sub_filter_opts;
 extern const struct m_sub_options mp_osd_render_sub_opts;
 extern const struct m_sub_options filter_conf;
 extern const struct m_sub_options resample_conf;
 extern const struct m_sub_options stream_conf;
+extern const struct m_sub_options dec_wrapper_conf;
 extern const struct m_sub_options mp_opt_root;
 
 #endif

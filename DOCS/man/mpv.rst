@@ -427,15 +427,18 @@ additionally wrapped in the fixed-length syntax, e.g. ``%n%string_of_length_n``
 Some mpv options interpret paths starting with ``~``. Currently, the prefix
 ``~~/`` expands to the mpv configuration directory (usually ``~/.config/mpv/``).
 ``~/`` expands to the user's home directory. (The trailing ``/`` is always
-required.) There are the following paths as well:
+required.) The following paths are currently recognized:
 
 ================ ===============================================================
 Name             Meaning
 ================ ===============================================================
+``~~/``          mpv config dir (for example ``~/.config/mpv/``)
+``~/``           user home directory root (similar to shell, ``$HOME``)
 ``~~home/``      same as ``~~/``
 ``~~global/``    the global config path, if available (not on win32)
 ``~~osxbundle/`` the OSX bundle resource path (OSX only)
 ``~~desktop/``   the path to the desktop (win32, OSX)
+``~~old_home``   do not use
 ================ ===============================================================
 
 
@@ -602,7 +605,7 @@ setting them to *no*. Even suboptions can be specified in this way.
         # Use GPU-accelerated video output by default.
         vo=gpu
         # Use quotes for text that can contain spaces:
-        status-msg="Time: ${time-pos}"
+        term-status-msg="Time: ${time-pos}"
 
 Escaping spaces and special characters
 --------------------------------------
@@ -786,7 +789,7 @@ listed.
 
 - ``AV:`` or ``V:`` (video only) or ``A:`` (audio only)
 - The current time position in ``HH:MM:SS`` format (``playback-time`` property)
-- The total file duration (absent if unknown) (``length`` property)
+- The total file duration (absent if unknown) (``duration`` property)
 - Playback speed, e.g. `` x2.0``. Only visible if the speed is not normal. This
   is the user-requested speed, and not the actual speed  (usually they should
   be the same, unless playback is too slow). (``speed`` property.)
@@ -812,11 +815,11 @@ listed.
 - Dropped frames, e.g. ``Dropped: 4``. Shows up only if the count is not 0. Can
   grow if the video framerate is higher than that of the display, or if video
   rendering is too slow. May also be incremented on "hiccups" and when the video
-  frame couldn't be displayed on time. (``vo-drop-frame-count`` property.)
+  frame couldn't be displayed on time. (``frame-drop-count`` property.)
   If the decoder drops frames, the number of decoder-dropped frames is appended
   to the display as well, e.g.: ``Dropped: 4/34``. This happens only if
   decoder frame dropping is enabled with the ``--framedrop`` options.
-  (``drop-frame-count`` property.)
+  (``decoder-frame-drop-count`` property.)
 - Cache state, e.g. ``Cache:  2s/134KB``. Visible if the stream cache is enabled.
   The first value shows the amount of video buffered in the demuxer in seconds,
   the second value shows the estimated size of the buffered amount in kilobytes.
@@ -895,7 +898,7 @@ PROTOCOLS
 
 ``smb://PATH``
 
-    Play a path from  Samba share.
+    Play a path from  Samba share. (Requires FFmpeg support.)
 
 ``bd://[title][/device]`` ``--bluray-device=PATH``
 
@@ -1022,11 +1025,10 @@ Currently this happens only in the following cases:
 - if you manually use ``--player-operation-mode=pseudo-gui`` on the command line
 
 This mode applies options from the builtin profile ``builtin-pseudo-gui``, but
-only if these haven't been set in the user's config file or on the command line.
-Also, for compatibility with the old pseudo-gui behavior, the options in the
-``pseudo-gui`` profile are applied unconditionally. In addition, the profile
-makes sure to enable the pseudo-GUI mode, so that ``--profile=pseudo-gui``
-works like in older mpv releases. The profiles are currently defined as follows:
+only if these haven't been set in the user's config file or on the command line,
+which is the main difference to using ``--profile=builtin-pseudo-gui``.
+
+The profile is currently defined as follows:
 
 ::
 
@@ -1035,6 +1037,14 @@ works like in older mpv releases. The profiles are currently defined as follows:
     force-window=yes
     idle=once
     screenshot-directory=~~desktop/
+
+The ``pseudo-gui`` profile exists for compatibility. The options in the
+``pseudo-gui`` profile are applied unconditionally. In addition, the profile
+makes sure to enable the pseudo-GUI mode, so that ``--profile=pseudo-gui``
+works like in older mpv releases:
+
+::
+
     [pseudo-gui]
     player-operation-mode=pseudo-gui
 
@@ -1088,10 +1098,6 @@ behavior of mpv.
 
     ``$HOME/.mpv`` is always added to the list of config search paths with a
     lower priority.
-
-``XDG_CONFIG_DIRS``
-    If set, XDG-style system configuration directories are used. Otherwise,
-    the UNIX convention (``PREFIX/etc/mpv/``) is used.
 
 ``MPV_HOME``
     Directory where mpv looks for user settings. Overrides ``HOME``, and mpv
@@ -1242,9 +1248,11 @@ For Windows-specifics, see `FILES ON WINDOWS`_ section.
 
 ``~/.config/mpv/scripts/``
     All files in this directory are loaded as if they were passed to the
-    ``--script`` option. They are loaded in alphabetical order, and sub-directories
-    and files with no ``.lua`` extension are ignored. The ``--load-scripts=no``
-    option disables loading these files.
+    ``--script`` option. They are loaded in alphabetical order.
+
+    The ``--load-scripts=no`` option disables loading these files.
+
+    See `Script location`_ for details.
 
 ``~/.config/mpv/watch_later/``
     Contains temporary config files needed for resuming playback of files with

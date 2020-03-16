@@ -1,12 +1,7 @@
 LUA SCRIPTING
 =============
 
-mpv can load Lua scripts. Scripts passed to the ``--script`` option, or found in
-the ``scripts`` subdirectory of the mpv configuration directory (usually
-``~/.config/mpv/scripts/``) will be loaded on program start. mpv also appends the
-``scripts`` subdirectory to the end of Lua's path so you can import scripts from
-there too. Since it's added to the end, don't name scripts you want to import
-the same as Lua libraries because they will be overshadowed by them.
+mpv can load Lua scripts. (See `Script location`_.)
 
 mpv provides the built-in module ``mp``, which contains functions to send
 commands to the mpv core and to retrieve information about playback state, user
@@ -29,6 +24,49 @@ A script which leaves fullscreen mode when the player is paused:
     end
     mp.observe_property("pause", "bool", on_pause_change)
 
+
+Script location
+---------------
+
+Scripts can be passed to the ``--script`` option, and are automatically loaded
+from the ``scripts`` subdirectory of the mpv configuration directory (usually
+``~/.config/mpv/scripts/``).
+
+A script can be a single file. The file extension is used to select the
+scripting backend to use for it. For Lua, it is ``.lua``. If the extension is
+not recognized, an error is printed. (If an error happens, the extension is
+either mistyped, or the backend was not compiled into your mpv binary.)
+
+Entries with ``.disable`` extension are always ignored.
+
+If a script is a directory (either if a directory is passed to ``--script``,
+or any sub-directories in the script directory, such as for example
+``~/.config/mpv/scripts/something/``), then the directory represents a single
+script. The player will try to load a file named ``main.x``, where ``x`` is
+replaced with the file extension. For example, if ``main.lua`` exists, it is
+loaded with the Lua scripting backend.
+
+You must not put any other files or directories that start with ``main.`` into
+the script's top level directory. If the script directory contains for example
+both ``main.lua`` and ``main.js``, only one of them will be loaded (and which
+one depends on mpv internals that may change any time). Likewise, if there is
+for example ``main.foo``, your script will break as soon as mpv adds a backend
+that uses the ``.foo`` file extension.
+
+mpv also appends the top level directory of the script to the start of Lua's
+package path so you can import scripts from there too. Be aware that this will
+shadow Lua libraries that use the same package path. (Single file scripts do not
+include mpv specific directory the Lua package path. This was silently changed
+in mpv 0.32.0.)
+
+Using a script directory is the recommended way to package a script that
+consists of multiple source files, or requires other files (you can use
+``mp.get_script_directory()`` to get the location and e.g. load data files).
+
+Making a script a git repository, basically a repository which contains a
+``main.lua``` file in the root directory, makes scripts easily updateable
+(without the dangers of auto-updates). Another suggestion is to use git
+submodules to share common files or libraries.
 
 Details on the script initialization and lifecycle
 --------------------------------------------------
@@ -127,12 +165,19 @@ The ``mp`` module is preloaded, although it can be loaded manually with
 
 ``mp.command_native_async(table [,fn])``
     Like ``mp.command_native()``, but the command is ran asynchronously (as far
-    as possible), and upon completion, fn is called. fn has two arguments:
-    ``fn(success, result, error)``. ``success`` is always a Boolean and is true
-    if the command was successful, otherwise false. The second parameter is
-    the result value (can be nil) in case of success, nil otherwise (as returned
-    by ``mp.command_native()``). The third parameter is the error string in case
-    of an error, nil otherwise.
+    as possible), and upon completion, fn is called. fn has three arguments:
+    ``fn(success, result, error)``:
+
+         ``success``
+            Always a Boolean and is true if the command was successful,
+            otherwise false.
+
+        ``result``
+            The result value (can be nil) in case of success, nil otherwise (as
+            returned by ``mp.command_native()``).
+
+        ``error``
+            The error string in case of an error, nil otherwise.
 
     Returns a table with undefined contents, which can be used as argument for
     ``mp.abort_async_command``.
@@ -256,21 +301,22 @@ The ``mp`` module is preloaded, although it can be loaded manually with
             argument being a table. This table has the following entries (and
             may contain undocumented ones):
 
-            ``event``
-                Set to one of the strings ``down``, ``repeat``, ``up`` or
-                ``press`` (the latter if key up/down can't be tracked).
+                ``event``
+                    Set to one of the strings ``down``, ``repeat``, ``up`` or
+                    ``press`` (the latter if key up/down can't be tracked).
 
-            ``is_mouse``
-                Boolean Whether the event was caused by a mouse button.
+                ``is_mouse``
+                    Boolean Whether the event was caused by a mouse button.
 
-            ``key_name``
-                The name of they key that triggered this, or ``nil`` if invoked
-                artificially. If the key name is unknown, it's an empty string.
+                ``key_name``
+                    The name of they key that triggered this, or ``nil`` if
+                    invoked artificially. If the key name is unknown, it's an
+                    empty string.
 
-            ``key_text``
-                Text if triggered by a text key, otherwise ``nil``. See
-                description of ``script-binding`` command for details (this
-                field is equivalent to the 5th argument).
+                ``key_text``
+                    Text if triggered by a text key, otherwise ``nil``. See
+                    description of ``script-binding`` command for details (this
+                    field is equivalent to the 5th argument).
 
     Internally, key bindings are dispatched via the ``script-message-to`` or
     ``script-binding`` input commands and ``mp.register_script_message``.
@@ -460,6 +506,11 @@ The ``mp`` module is preloaded, although it can be loaded manually with
 
         The script ``/path/to/fooscript.lua`` becomes ``fooscript``.
 
+``mp.get_script_directory()``
+    Return the directory if this is a script packaged as directory (see
+    `Script location`_ for a description). Return nothing if this is a single
+    file script.
+
 ``mp.osd_message(text [,duration])``
     Show an OSD message on the screen. ``duration`` is in seconds, and is
     optional (uses ``--osd-duration`` by default).
@@ -548,6 +599,7 @@ are useful only in special situations.
     ``update()``
         Commit the OSD overlay to the screen, or in other words, run the
         ``osd-overlay`` command with the current fields of the overlay table.
+        Returns the result of the ``osd-overlay`` command itself.
 
     ``remove()``
         Remove the overlay from the screen. A ``update()`` call will add it
@@ -878,7 +930,7 @@ List of events
 ``tick``
     Called after a video frame was displayed. This is a hack, and you should
     avoid using it. Use timers instead and maybe watch pausing/unpausing events
-    to avoid wasting CPU when the player is paused.
+    to avoid wasting CPU when the player is paused. This is deprecated.
 
 ``shutdown``
     Sent when the player quits, and the script should terminate. Normally

@@ -222,7 +222,7 @@ Playback Control
     chapter instead. A negative value means always go back to the previous
     chapter.
 
-``--hr-seek=<no|absolute|yes>``
+``--hr-seek=<no|absolute|yes|default>``
     Select when to use precise seeks that are not limited to keyframes. Such
     seeks require decoding video from the previous keyframe up to the target
     position and so can take some time depending on decoding performance. For
@@ -234,6 +234,9 @@ Playback Control
     :absolute: Use precise seeks if the seek is to an absolute position in the
                file, such as a chapter seek, but not for relative seeks like
                the default behavior of arrow keys (default).
+    :default:  Like ``absolute``, but enable hr-seeks in audio-only cases. The
+               exact behavior is implementation specific and may change with
+               new releases.
     :yes:      Use precise seeks whenever possible.
     :always:   Same as ``yes`` (for compatibility).
 
@@ -345,6 +348,14 @@ Playback Control
 
     The loop-points can be adjusted at runtime with the corresponding
     properties. See also ``ab-loop`` command.
+
+``--ab-loop-count=<N|inf>``
+    Run A-B loops only N times, then ignore the A-B loop points (default: inf).
+    Every finished loop iteration will decrement this option by 1 (unless it is
+    set to ``inf`` or 0). ``inf`` means that looping goes on forever. If this
+    option is set to 0, A-B looping is ignored, and even the ``ab-loop`` command
+    will not enable looping again (the command will show ``(disabled)`` on the
+    OSD message if both loop points are set, but ``ab-loop-count`` is 0).
 
 ``--ordered-chapters``, ``--no-ordered-chapters``
     Enabled by default.
@@ -521,6 +532,9 @@ Playback Control
       (basically it's the ``--video-reversal-buffer`` equivalent for the
       demuxer layer).
 
+    - Setting ``--vd-queue-enable=yes`` can help a lot to make playback smooth
+      (once it works).
+
     - ``--demuxer-backward-playback-step`` also factors into how many seeks may
       be performed, and whether backward demuxing could break due to queue
       overflow. If it's set too high, the backstep operation needs to search
@@ -651,6 +665,9 @@ Program Behavior
     files will be truncated. The log level is at least ``-v -v``, but
     can be raised via ``--msg-level`` (the option cannot lower it below the
     forced minimum log level).
+
+    A special case is the macOS bundle, it will create a log file at
+    ``~/Library/Logs/mpv.log`` by default.
 
 ``--config-dir=<path>``
     Force a different configuration directory. If this is set, the given
@@ -799,40 +816,109 @@ Program Behavior
 
     If the script can't do anything with an URL, it will do nothing.
 
-    The ``try_ytdl_first`` script option accepts a boolean 'yes' or 'no', and if
-    'yes' will try parsing the URL with youtube-dl first, instead of the default
-    where it's only after mpv failed to open it. This mostly depends on whether
-    most of your URLs need youtube-dl parsing.
+    This accepts a set of options, which can be passed to it with the
+    ``--script-opts`` option (using ``ytdl_hook-`` as prefix):
 
-    The ``exclude`` script option accepts a ``|``-separated list of URL patterns
-    which mpv should not use with youtube-dl. The patterns are matched after
-    the ``http(s)://`` part of the URL.
+    ``try_ytdl_first=<yes|no>``
+        If 'yes' will try parsing the URL with youtube-dl first, instead of the
+        default where it's only after mpv failed to open it. This mostly depends
+        on whether most of your URLs need youtube-dl parsing.
 
-    ``^`` matches the beginning of the URL, ``$`` matches its end, and you
-    should use ``%`` before any of the characters ``^$()%|,.[]*+-?`` to match
-    that character.
+    ``exclude=<URL1|URL2|...``
+        A ``|``-separated list of URL patterns which mpv should not use with
+        youtube-dl. The patterns are matched after the ``http(s)://`` part of
+        the URL.
 
-    .. admonition:: Examples
+        ``^`` matches the beginning of the URL, ``$`` matches its end, and you
+        should use ``%`` before any of the characters ``^$()%|,.[]*+-?`` to
+        match that character.
 
-        - ``--script-opts=ytdl_hook-exclude='^youtube%.com'``
-          will exclude any URL that starts with ``http://youtube.com`` or
-          ``https://youtube.com``.
-        - ``--script-opts=ytdl_hook-exclude='%.mkv$|%.mp4$'``
-          will exclude any URL that ends with ``.mkv`` or ``.mp4``.
+        .. admonition:: Examples
 
-    See more lua patterns here: https://www.lua.org/manual/5.1/manual.html#5.4.1
+            - ``--script-opts=ytdl_hook-exclude='^youtube%.com'``
+              will exclude any URL that starts with ``http://youtube.com`` or
+              ``https://youtube.com``.
+            - ``--script-opts=ytdl_hook-exclude='%.mkv$|%.mp4$'``
+              will exclude any URL that ends with ``.mkv`` or ``.mp4``.
 
-    The ``use_manifests`` script option makes mpv use the master manifest URL for
-    formats like HLS and DASH, if available, allowing for video/audio selection
-    in runtime. It's disabled ("no") by default for performance reasons.
+        See more lua patterns here: https://www.lua.org/manual/5.1/manual.html#5.4.1
 
-``--ytdl-format=<best|worst|mp4|webm|...>``
+    ``all_formats=<yes|no>``
+        If 'yes' will attempt to add all formats found reported by youtube-dl
+        (default: no). Each format is added as a separate track. In addition,
+        they are delay-loaded, and actually opened only when a track is selected
+        (this should keep load times as low as without this option).
+
+        It adds average bitrate metadata, if available, which means you can use
+        ``--hls-bitrate`` to decide which track to select. (HLS used to be the
+        only format whose alternative quality streams were exposed in a similar
+        way, thus the option name.)
+
+        Tracks which represent formats that were selected by youtube-dl as
+        default will have the default flag set. This means mpv should generally
+        still select formats chosen with ``--ytdl-format`` by default.
+
+        Although this mechanism makes it possible to switch streams at runtime,
+        it's not suitable for this purpose for various technical reasons. (It's
+        slow, which can't be really fixed.) In general, this option is not
+        useful, and was only added to show that it's possible.
+
+        There are two cases that must be considered when doing quality/bandwidth
+        selection:
+
+            1. Completely separate audio and video streams (DASH-like). Each of
+               these streams contain either only audio or video, so you can
+               mix and combine audio/video bandwidths without restriction. This
+               intuitively matches best with the concept of selecting quality
+               by track (what ``all_formats`` is supposed to do).
+
+            2. Separate sets of muxed audio and video streams. Each version of
+               the media contains both an audio and video stream, and they are
+               interleaved. In order not to waste bandwidth, you should only
+               select one of these versions (if, for example, you select an
+               audio stream, then video will be downloaded, even if you selected
+               video from a different stream).
+
+               mpv will still represent them as separate tracks, but will set
+               the title of each track to ``muxed-N``, where ``N`` is replaced
+               with the youtube-dl format ID of the originating stream.
+
+        Some sites will mix 1. and 2., but we assume that they do so for
+        compatibility reasons, and there is no reason to use them at all.
+
+    ``force_all_formats=<yes|no>``
+        If set to 'yes', and ``all_formats`` is also set to 'yes', this will
+        try to represent all youtube-dl reported formats as tracks, even if
+        mpv would normally use the direct URL reported by it (default: yes).
+
+        It appears this normally makes a difference if youtube-dl works on a
+        master HLS playlist.
+
+        If this is set to 'no', this specific kind of stream is treated like
+        ``all_formats`` is set to 'no', and the stream selection as done by
+        youtube-dl (via ``--ytdl-format``) is used.
+
+    ``use_manifests=<yes|no>``
+        Make mpv use the master manifest URL for formats like HLS and DASH,
+        if available, allowing for video/audio selection in runtime (default:
+        no). It's disabled ("no") by default for performance reasons.
+
+    .. admonition:: Why do the option names mix ``_`` and ``-``?
+
+        I have no idea.
+
+``--ytdl-format=<ytdl|best|worst|mp4|webm|...>``
     Video format/quality that is directly passed to youtube-dl. The possible
     values are specific to the website and the video, for a given url the
     available formats can be found with the command
     ``youtube-dl --list-formats URL``. See youtube-dl's documentation for
     available aliases.
-    (Default: youtube-dl's default, currently ``bestvideo+bestaudio/best``)
+    (Default: ``bestvideo+bestaudio/best``)
+
+    The ``ytdl`` value does not pass a ``--format`` option to youtube-dl at all,
+    and thus does not override its default. Note that sometimes youtube-dl
+    returns a format that mpv cannot use, and in these cases the mpv default
+    may work better.
 
 ``--ytdl-raw-options=<key>=<value>[,<key>=<value>[,...]]``
     Pass arbitrary options to youtube-dl. Parameter and argument should be
@@ -871,7 +957,7 @@ Program Behavior
     For enabling "pseudo GUI mode", which means that the defaults for some
     options are changed. This option should not normally be used directly, but
     only by mpv internally, or mpv-provided scripts, config files, or .desktop
-    files.
+    files. See `PSEUDO GUI MODE`_ for details.
 
 Video
 -----
@@ -1746,7 +1832,7 @@ Audio
     other players) ignore this for the sake of better audio quality.
 
 ``--ad-lavc-downmix=<yes|no>``
-    Whether to request audio channel downmixing from the decoder (default: yes).
+    Whether to request audio channel downmixing from the decoder (default: no).
     Some decoders, like AC-3, AAC and DTS, can remix audio on decoding. The
     requested number of output channels is set with the ``--audio-channels`` option.
     Useful for playing surround audio on a stereo system.
@@ -2200,7 +2286,7 @@ Subtitles
 
 ``--sub-ass-vsfilter-blur-compat=<yes|no>``
     Scale ``\blur`` tags by video resolution instead of script resolution
-    (enabled by default). This is bug in VSFilter, which according to some,
+    (disabled by default). This is bug in VSFilter, which according to some,
     can't be fixed anymore in the name of compatibility.
 
     Note that this uses the actual video resolution for calculating the
@@ -2320,6 +2406,11 @@ Subtitles
 
     This option changed in mpv 0.23.0. Support for the old syntax was fully
     removed in mpv 0.24.0.
+
+    .. note::
+
+        This works for text subtitle files only. Other types of subtitles (in
+        particular subtitles in mkv files) are always assumed to be UTF-8.
 
 
 ``--sub-fix-timing=<yes|no>``
@@ -2554,6 +2645,47 @@ Subtitles
     lower and upper case letters.
 
     Default: ``no``.
+
+``--sub-filter-regex-...=...``
+    Set a list of regular expressions to match on text subtitles, and remove any
+    lines that match (default: empty). This is a string list option. See
+    `List Options`_ for details. Normally, you should use
+    ``--sub-filter-regex-append=<regex>``, where each option use will append a
+    new regular expression, without having to fight escaping problems.
+
+    List items are matched in order. If a regular expression matches, the
+    process is stopped, and the subtitle line is discarded. The text matched
+    against is, currently, always the ``Text`` field of ASS events (if the
+    subtitle format is different, it is always converted). This may include
+    formatting tags. Matching is case-insensitive, but how this is done depends
+    on the libc, and most likely works in ASCII only. It does not work on
+    bitmap/image subtitles. Unavailable on inferior OSes (requires POSIX regex
+    support).
+
+    .. admonition:: Example
+
+        ``--sub-filter-regex-append=opensubtitles\.org`` filters some ads.
+
+    Technically, using a list for matching is redundant, since you could just
+    use a single combined regular expression. But it helps with diagnosis,
+    ease of use, and temporarily disabling or enabling individual filters.
+
+    .. warning::
+
+        This is experimental. The semantics most likely will change, and if you
+        use this, you should be prepared to update the option later. Ideas
+        include replacing the regexes with a very primitive and small subset of
+        sed, or some method to control case-sensitivity.
+
+``--sub-filter-regex-warn=<yes|no>``
+    Log dropped lines with warning log level, instead of verbose (default: no).
+    Helpful for testing.
+
+``--sub-filter-regex-enable=<yes|no>``
+    Whether to enable regex filtering (default: yes). Note that if no regexes
+    are added to the ``--sub-filter-regex`` list, setting this option to ``yes``
+    has no default. It's meant to easily disable or enable filtering
+    temporarily.
 
 ``--sub-create-cc-track=<yes|no>``
     For every video stream, create a closed captions track (default: no). The
@@ -3280,6 +3412,12 @@ Demuxer
 ``--demuxer-mkv-subtitle-preroll-secs-index=<value>``
     See ``--demuxer-mkv-subtitle-preroll``.
 
+``--demuxer-mkv-probe-start-time=<yes|no>``
+    Check the start time of Matroska files (default: yes). This simply reads the
+    first cluster timestamps and assumes it is the start time. Technically, this
+    also reads the first timestamp, which may increase latency by one frame
+    (which may be relevant for live streams).
+
 ``--demuxer-mkv-probe-video-duration=<yes|no|full>``
     When opening the file, seek to the end of it, and check what timestamp the
     last video packet has, and report that as file duration. This is strictly
@@ -3360,7 +3498,8 @@ Demuxer
     position (as it removes past packets that are seek points).
 
     If the end of the file is reached, the remaining unused forward buffer space
-    is "donated" to the backbuffer (unless the backbuffer size is set to 0).
+    is "donated" to the backbuffer (unless the backbuffer size is set to 0, or
+    ``--demuxer-donate-buffer`` is set to ``no``).
     This still limits the total cache usage to the sum of the forward and
     backward cache, and effectively makes better use of the total allowed memory
     budget. (The opposite does not happen: free backward buffer is never
@@ -3371,6 +3510,18 @@ Demuxer
     impression about how much data the backbuffer contains.
 
     See ``--list-options`` for defaults and value range.
+
+``--demuxer-donate-buffer=<yes|no>``
+    Whether to let the back buffer use part of the forward buffer (default: yes).
+    If set to ``yes``, the "donation" behavior described in the option
+    description for ``--demuxer-max-back-bytes`` is enabled. This means the
+    back buffer may use up memory up to the sum of the forward and back buffer
+    options, minus the active size of the forward buffer. If set to ``no``, the
+    options strictly limit the forward and back buffer sizes separately.
+
+    Note that if the end of the file is reached, the buffered data stays the
+    same, even if you seek back within the cache. This is because the back
+    buffer is only reduced when new data is read.
 
 ``--demuxer-seekable-cache=<yes|no|auto>``
     This controls whether seeking can use the demuxer cache (default: auto). If
@@ -3388,6 +3539,16 @@ Demuxer
     The special value ``auto`` means ``yes`` in the same situation as
     ``--cache-secs`` is used (i.e. when the stream appears to be a network
     stream or the stream cache is enabled).
+
+``--demuxer-force-retry-on-eof=<yes|no>``
+    Whether to keep retrying making the demuxer thread read more packets each
+    time the decoder dequeues a packet, even if the end of the file was reached
+    (default: no). This does not really make sense, but was the default behavior
+    in mpv 0.32.0 and earlier. This option will be silently removed after a
+    while, and exists only to restore the old behavior for testing, in case this
+    was actually needed somewhere. This does _not_ help with files that are
+    being appended to (in these cases use ``appending://``, or disable the
+    cache).
 
 ``--demuxer-thread=<yes|no>``
     Run the demuxer in a separate thread, and let it prefetch a certain amount
@@ -3417,8 +3578,13 @@ Demuxer
     a timestamp difference higher than the readahead amount relative to the
     last packet returned to the decoder, the demuxer keeps reading.
 
-    Note that the ``--cache-secs`` option will override this value if a cache
-    is enabled, and the value is larger.
+    Note that enabling the cache (such as ``--cache=yes``, or if the input
+    is considered a network stream, and ``--cache=auto`` is used), this option
+    is mostly ignored. (``--cache-secs`` will override this. Technically, the
+    maximum of both options is used.)
+
+    The main purpose of this option is to limit the readhead for local playback,
+    since a large readahead value is not overly useful in this case.
 
     (This value tends to be fuzzy, because many file formats don't store linear
     timestamps.)
@@ -3993,13 +4159,14 @@ Software Scaler
     VOs like ``drm`` and ``x11`` will benefit a lot from using ``--sws-fast``.
     You may need to set other options, like ``--sws-scaler``. The builtin
     ``sws-fast`` profile sets this option and some others to gain performance
-    for reduced quality.
+    for reduced quality. Also see ``--sws-allow-zimg``.
 
 ``--sws-allow-zimg=<yes|no>``
     Allow using zimg (if the component using the internal swscale wrapper
-    explicitly allows so). In this case, zimg *may* be used, if the internal
-    zimg wrapper supports the input and output formats. It will silently
-    fall back to libswscale if one of these conditions does not apply.
+    explicitly allows so) (default: yes). In this case, zimg *may* be used, if
+    the internal zimg wrapper supports the input and output formats. It will
+    silently or noisily fall back to libswscale if one of these conditions does
+    not apply.
 
     If zimg is used, the other ``--sws-`` options are ignored, and the
     ``--zimg-`` options are used instead.
@@ -4009,6 +4176,13 @@ Software Scaler
     being used.
 
     Most things which need software conversion can make use of this.
+
+    .. note::
+
+        Do note that zimg *may* be slower than libswscale. Usually,
+        it's faster on x86 platforms, but slower on ARM (due to lack of ARM
+        specific optimizations). The mpv zimg wrapper uses unoptimized repacking
+        for some formats, for which zimg cannot be blamed.
 
 ``--zimg-scaler=<point|bilinear|bicubic|spline16|spline36|lanczos>``
     Zimg luma scaler to use (default: lanczos).
@@ -4196,7 +4370,10 @@ Terminal
     Prepend module name to each console message.
 
 ``--msg-time``
-    Prepend timing information to each console message.
+    Prepend timing information to each console message. The time is in
+    microseconds since the player process was started (technically, slightly
+    later actually), using a monotonic time source depending on the OS. This
+    is ``CLOCK_MONOTONIC`` on sane UNIX variants.
 
 Cache
 -----
@@ -4221,6 +4398,12 @@ Cache
     Turn off input stream caching. See ``--cache``.
 
 ``--cache-secs=<seconds>``
+    Deprecated. Once this option is removed, there will be no way to limit the
+    cache size by time (only by size with ``--demuxer-max-bytes``). This option
+    is considered useless, since there is no good reason to limit the cache by
+    time, and the default value of this option is already something very high.
+    The interaction with the other cache options is also confusing.
+
     How many seconds of audio/video to prefetch if the cache is active. This
     overrides the ``--demuxer-readahead-secs`` option if and only if the cache
     is enabled and the value is larger. The default value is set to something
@@ -4335,6 +4518,54 @@ Cache
     See ``--list-options`` for defaults and value range. ``<bytesize>`` options
     accept suffixes such as ``KiB`` and ``MiB``.
 
+``--vd-queue-enable=<yes|no>, --ad-queue-enable``
+    Enable running the video/audio decoder on a separate thread (default: no).
+    If enabled, the decoder is run on a separate thread, and a frame queue is
+    put between decoder and higher level playback logic. The size of the frame
+    queue is defined by the other options below.
+
+    This is probably quite pointless. libavcodec already has multithreaded
+    decoding (enabled by default), which makes this largely unnecessary. It
+    might help in some corner cases with high bandwidth video that is slow to
+    decode (in these cases libavcodec would block the playback logic, while
+    using a decoding thread would distribute the decoding time evenly without
+    affecting the playback logic). In other situations, it will simply make
+    seeking slower and use significantly more memory.
+
+    The queue size is restricted by the other ``--vd-queue-...`` options. The
+    final queue size is the minimum as indicated by the option with the lowest
+    limit. Each decoder/track has its own queue that may use the full configured
+    queue size.
+
+    Most queue options can be changed at runtime. ``--vd-queue-enable`` itself
+    (and the audio equivalent) update only if decoding is completely
+    reinitialized. However, setting ``--vd-queue-max-samples=1`` should almost
+    lead to the same behavior as ``--vd-queue-enable=no``, so that value can
+    be used for effectively runtime enabling/disabling the queue.
+
+    This should not be used with hardware decoding. It is possible to enable
+    this for audio, but it makes even less sense.
+
+``--vd-queue-max-bytes=<bytesize>``, ``--ad-queue-max-bytes``
+    Maximum approximate allowed size of the queue. If exceeded, decoding will
+    be stopped. The maximum size can be exceeded by about 1 frame.
+
+    See ``--list-options`` for defaults and value range. ``<bytesize>`` options
+    accept suffixes such as ``KiB`` and ``MiB``.
+
+``--vd-queue-max-samples=<int>``, ``--ad-queue-max-samples``
+    Maximum number of frames (video) or samples (audio) of the queue. The audio
+    size may be exceeded by about 1 frame.
+
+    See ``--list-options`` for defaults and value range.
+
+``--vd-queue-max-secs=<seconds>``, ``--ad-queue-max-secs``
+    Maximum number of seconds of media in the queue. The special value 0 means
+    no limit is set. The queue size may be exceeded by about 2 frames. Timestamp
+    resets may lead to random queue size usage.
+
+    See ``--list-options`` for defaults and value range.
+
 Network
 -------
 
@@ -4413,7 +4644,7 @@ Network
         option is ignored (or should be ignored) on RTSP URLs. You can still
         set the timeout option directly with ``--demuxer-lavf-o``.
 
-``--rtsp-transport=<lavf|udp|tcp|http>``
+``--rtsp-transport=<lavf|udp|udp_multicast|tcp|http>``
     Select RTSP transport method (default: tcp). This selects the underlying
     network transport when playing ``rtsp://...`` URLs. The value ``lavf``
     leaves the decision to libavformat.
@@ -4729,6 +4960,8 @@ The following video options are currently all specific to ``--vo=gpu`` and
     better than without it) since it will extend the size to match only the
     milder of the scale factors between the axes.
 
+    Note: this option is ignored when using bilinear downscaling (the default).
+
 ``--linear-downscaling``
     Scale in linear light when downscaling. It should only be used with a
     ``--fbo-format`` that has at least 16 bit precision. This option
@@ -4985,15 +5218,6 @@ The following video options are currently all specific to ``--vo=gpu`` and
     drivers support it.)
 
     Currently only relevant for ``--gpu-api=d3d11``.
-
-``--wayland-frame-wait-offset=<-500..3000>``
-    Control the amount of offset (in microseconds) to add to wayland's frame wait
-    (default 1000). The wayland context assumes that if frame callback or presentation
-    feedback isn't received within a certain amount of time then the video is being
-    rendered offscreen. The time it waits is equal to how long it takes your monitor
-    to display a frame (i.e. 1/refresh rate) plus the offset. In general, staying
-    close to your monitor's refresh rate is preferred, but with a small offset in
-    case a frame takes a little long to display.
 
 ``--wayland-disable-vsync=<yes|no>``
     Disable vsync for the wayland contexts (default: no). Useful for benchmarking
@@ -5385,7 +5609,7 @@ The following video options are currently all specific to ``--vo=gpu`` and
 
     Windows with ANGLE only.
 
-``--cocoa-force-dedicated-gpu=<yes|no>``
+``--macos-force-dedicated-gpu=<yes|no>``
     Deactivates the automatic graphics switching and forces the dedicated GPU.
     (default: no)
 

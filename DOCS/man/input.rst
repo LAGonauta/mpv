@@ -1019,6 +1019,31 @@ Input Commands that are Possibly Subject to Change
         It's possible that future mpv versions will randomly change how Z order
         between different OSD formats and builtin OSD is handled.
 
+    ``hidden``
+        If set to ``yes``/true, do not display this (default: no).
+
+    ``compute_bounds``
+        If set to ``yes``/true, attempt to determine bounds and write them to
+        the command's result value as ``x0``, ``x1``, ``y0``, ``y1`` rectangle
+        (default: no). If the rectangle is empty, not known, or somehow
+        degenerate, it is not set. ``x1``/``y1`` is the coordinate of the bottom
+        exclusive corner of the rectangle.
+
+        The result value may depend on the VO window size, and is based on the
+        last known window size at the time of the call. This means the results
+        may be different from what is actually rendered.
+
+        For ``ass-events``, the result rectangle is recomputed to ``PlayRes``
+        coordinates (``res_x``/``res_y``). If window size is not known, a
+        fallback is chosen.
+
+        You should be aware that this mechanism is very inefficient, as it
+        renders the full result, and then uses the bounding box of the rendered
+        bitmap list (even if ``hidden`` is set). It will flush various caches.
+        Its results also depend on the used libass version.
+
+        This feature is experimental, and may change in some way again.
+
     Note: always use named arguments (``mpv_command_node()``). Scripts should
     use the ``mp.create_osd_overlay()`` helper instead of invoking this command
     directly.
@@ -1228,6 +1253,12 @@ the player freeze randomly. Basically, nobody should use this API.
 The C API is described in the header files. The Lua API is described in the
 Lua section.
 
+Before a hook is actually invoked on an API clients, it will attempt to return
+new values for all observed properties that were changed before the hook. This
+may make it easier for an application to set defined "barriers" between property
+change notifications by registering hooks. (That means these hooks will have an
+effect, even if you do nothing and make them continue immediately.)
+
 The following hooks are currently defined:
 
 ``on_load``
@@ -1261,46 +1292,15 @@ The following hooks are currently defined:
     Run before closing a file, and before actually uninitializing
     everything. It's not possible to resume playback in this state.
 
-Legacy hook API
-~~~~~~~~~~~~~~~
+``on_before_start_file``
+    Run before a ``start-file`` event is sent. (If any client changes the
+    current playlist entry, or sends a quit command to the player, the
+    corresponding event will not actually happen after the hook returns.)
+    Useful to drain property changes before a new file is loaded.
 
-.. warning::
-
-    The legacy API is deprecated and will be removed soon.
-
-There are two special commands involved. Also, the client must listen for
-client messages (``MPV_EVENT_CLIENT_MESSAGE`` in the C API).
-
-``hook-add <hook-name> <id> <priority>``
-    Subscribe to the hook identified by the first argument (basically, the
-    name of event). The ``id`` argument is an arbitrary integer chosen by the
-    user. ``priority`` is used to sort all hook handlers globally across all
-    clients. Each client can register multiple hook handlers (even for the
-    same hook-name). Once the hook is registered, it cannot be unregistered.
-
-    When a specific event happens, all registered handlers are run serially.
-    This uses a protocol every client has to follow explicitly. When a hook
-    handler is run, a client message (``MPV_EVENT_CLIENT_MESSAGE``) is sent to
-    the client which registered the hook. This message has the following
-    arguments:
-
-    1. the string ``hook_run``
-    2. the ``id`` argument the hook was registered with as string (this can be
-       used to correctly handle multiple hooks registered by the same client,
-       as long as the ``id`` argument is unique in the client)
-    3. something undefined, used by the hook mechanism to track hook execution
-
-    Upon receiving this message, the client can handle the event. While doing
-    this, the player core will still react to requests, but playback will
-    typically be stopped.
-
-    When the client is done, it must continue the core's hook execution by
-    running the ``hook-ack`` command.
-
-``hook-ack <string>``
-    Run the next hook in the global chain of hooks. The argument is the 3rd
-    argument of the client message that starts hook execution for the
-    current client.
+``on_after_end_file``
+    Run after an ``end-file`` event. Useful to drain property changes after a
+    file has finished.
 
 Input Command Prefixes
 ----------------------
@@ -1800,6 +1800,8 @@ Property list
     includes all overhead, and possibly unused data (like pruned data). This
     member is missing if the file cache is not active.
 
+    ``cache-duration`` is ``demuxer-cache-duration``. Missing if unavailable.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -1815,6 +1817,7 @@ Property list
             "eof-cached"        MPV_FORMAT_FLAG
             "fw-bytes"          MPV_FORMAT_INT64
             "file-cache-bytes"  MPV_FORMAT_INT64
+            "cache-duration"    MPV_FORMAT_DOUBLE
 
     Other fields (might be changed or removed in the future):
 
@@ -2224,14 +2227,20 @@ Property list
     present null is returned instead.
 
 ``sub-end``
-    Return the current subtitle start time (in seconds). If there's multiple
+    Return the current subtitle end time (in seconds). If there's multiple
     current subtitles, return the last end time. If no current subtitle is
     present, or if it's present but has unknown or incorrect duration, null
     is returned instead.
 
 ``playlist-pos`` (RW)
-    Current position on playlist. The first entry is on position 0. Writing
-    to the property will restart playback at the written entry.
+    Current position on playlist. The first entry is on position 0. Writing to
+    this property may start playback at the new position.
+
+    What happens if you write the same value back to the property is
+    implementation dependent. Currently, writing the same value will restart
+    playback from the beginning. It is possible (but not necessarily planned)
+    that in the future, write access if the same value is written will be
+    ignored.
 
 ``playlist-pos-1`` (RW)
     Same as ``playlist-pos``, but 1-based.
@@ -2739,6 +2748,11 @@ Property list
     number, or a git hash. This applies to Libav as well (the property is
     still named the same.) This property is unavailable if mpv is linked against
     older FFmpeg and Libav versions.
+
+``libass-version``
+    Return the value of ``ass_library_version()``. This is an integer, encoded
+    in a somewhat weird form (apparently "hex BCD"), indicating the release
+    version of the libass library linked to mpv.
 
 ``options/<name>`` (RW)
     Read-only access to value of option ``--<name>``. Most options can be

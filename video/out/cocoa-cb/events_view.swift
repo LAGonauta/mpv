@@ -120,6 +120,7 @@ class EventsView: NSView {
         if mpv?.mouseEnabled() ?? true {
             cocoa_put_key_with_modifiers(SWIFT_KEY_MOUSE_ENTER, 0)
         }
+        cocoaCB.updateCursorVisibility()
     }
 
     override func mouseExited(with event: NSEvent) {
@@ -127,6 +128,7 @@ class EventsView: NSView {
             cocoa_put_key_with_modifiers(SWIFT_KEY_MOUSE_LEAVE, 0)
         }
         cocoaCB.titleBar?.hide()
+        cocoaCB.setCursorVisiblility(true)
     }
 
     override func mouseMoved(with event: NSEvent) {
@@ -179,6 +181,11 @@ class EventsView: NSView {
         }
     }
 
+    override func magnify(with event: NSEvent) {
+        cocoaCB.layer?.inLiveResize = event.phase == .ended ? false : true
+        cocoaCB.window?.addWindowScale(Double(event.magnification))
+    }
+
     func signalMouseDown(_ event: NSEvent) {
         signalMouseEvent(event, MP_KEY_STATE_DOWN)
         if event.clickCount > 1 {
@@ -193,7 +200,7 @@ class EventsView: NSView {
     func signalMouseEvent(_ event: NSEvent, _ state: UInt32) {
         hasMouseDown = state == MP_KEY_STATE_DOWN
         let mpkey = getMpvButton(event)
-        cocoa_put_key_with_modifiers((mpkey | Int32(state)), Int32(event.modifierFlags.rawValue));
+        cocoa_put_key_with_modifiers((mpkey | Int32(state)), Int32(event.modifierFlags.rawValue))
     }
 
     func signalMouseMovement(_ event: NSEvent) {
@@ -212,11 +219,11 @@ class EventsView: NSView {
         var cmd: Int32
 
         if abs(event.deltaY) >= abs(event.deltaX) {
-            delta = Double(event.deltaY) * 0.1;
-            cmd = delta > 0 ? SWIFT_WHEEL_UP : SWIFT_WHEEL_DOWN;
+            delta = Double(event.deltaY) * 0.1
+            cmd = delta > 0 ? SWIFT_WHEEL_UP : SWIFT_WHEEL_DOWN
         } else {
-            delta = Double(event.deltaX) * 0.1;
-            cmd = delta > 0 ? SWIFT_WHEEL_RIGHT : SWIFT_WHEEL_LEFT;
+            delta = Double(event.deltaX) * 0.1
+            cmd = delta > 0 ? SWIFT_WHEEL_RIGHT : SWIFT_WHEEL_LEFT
         }
 
         mpv?.putAxis(cmd, delta: abs(delta))
@@ -236,9 +243,9 @@ class EventsView: NSView {
             var mpkey: Int32
 
             if abs(deltaY) >= abs(deltaX) {
-                mpkey = deltaY > 0 ? SWIFT_WHEEL_UP : SWIFT_WHEEL_DOWN;
+                mpkey = deltaY > 0 ? SWIFT_WHEEL_UP : SWIFT_WHEEL_DOWN
             } else {
-                mpkey = deltaX > 0 ? SWIFT_WHEEL_RIGHT : SWIFT_WHEEL_LEFT;
+                mpkey = deltaX > 0 ? SWIFT_WHEEL_RIGHT : SWIFT_WHEEL_LEFT
             }
 
             cocoa_put_key_with_modifiers(mpkey, Int32(modifiers.rawValue))
@@ -278,12 +285,12 @@ class EventsView: NSView {
     func getMpvButton(_ event: NSEvent) -> Int32 {
         let buttonNumber = event.buttonNumber
         switch (buttonNumber) {
-            case 0:  return SWIFT_MBTN_LEFT;
-            case 1:  return SWIFT_MBTN_RIGHT;
-            case 2:  return SWIFT_MBTN_MID;
-            case 3:  return SWIFT_MBTN_BACK;
-            case 4:  return SWIFT_MBTN_FORWARD;
-            default: return SWIFT_MBTN9 + Int32(buttonNumber - 5);
+            case 0:  return SWIFT_MBTN_LEFT
+            case 1:  return SWIFT_MBTN_RIGHT
+            case 2:  return SWIFT_MBTN_MID
+            case 3:  return SWIFT_MBTN_BACK
+            case 4:  return SWIFT_MBTN_FORWARD
+            default: return SWIFT_MBTN9 + Int32(buttonNumber - 5)
         }
     }
 }

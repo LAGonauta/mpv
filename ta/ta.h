@@ -50,9 +50,8 @@ void *ta_realloc_size(void *ta_parent, void *ptr, size_t size);
 size_t ta_get_size(void *ptr);
 void ta_free(void *ptr);
 void ta_free_children(void *ptr);
-bool ta_set_destructor(void *ptr, void (*destructor)(void *));
-bool ta_set_parent(void *ptr, void *ta_parent);
-void *ta_find_parent(void *ptr);
+void ta_set_destructor(void *ptr, void (*destructor)(void *));
+void ta_set_parent(void *ptr, void *ta_parent);
 
 // Utility functions
 size_t ta_calc_array_size(size_t element_size, size_t count);
@@ -106,8 +105,6 @@ bool ta_vasprintf_append_buffer(char **str, const char *fmt, va_list ap) TA_PRF(
 // code.
 #define ta_xalloc_size(...)             ta_oom_p(ta_alloc_size(__VA_ARGS__))
 #define ta_xzalloc_size(...)            ta_oom_p(ta_zalloc_size(__VA_ARGS__))
-#define ta_xset_destructor(...)         ta_oom_b(ta_set_destructor(__VA_ARGS__))
-#define ta_xset_parent(...)             ta_oom_b(ta_set_parent(__VA_ARGS__))
 #define ta_xnew_context(...)            ta_oom_p(ta_new_context(__VA_ARGS__))
 #define ta_xstrdup_append(...)          ta_oom_b(ta_strdup_append(__VA_ARGS__))
 #define ta_xstrdup_append_buffer(...)   ta_oom_b(ta_strdup_append_buffer(__VA_ARGS__))

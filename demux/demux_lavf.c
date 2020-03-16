@@ -102,7 +102,9 @@ const struct m_sub_options demux_lavf_conf = {
                ({"lavf", 0},
                 {"udp", 1},
                 {"tcp", 2},
-                {"http", 3})),
+                {"http", 3},
+                {"udp_multicast", 4}
+                )),
         OPT_CHOICE("demuxer-lavf-linearize-timestamps", linearize_ts, 0,
                    ({"no", 0}, {"auto", -1}, {"yes", 1})),
         OPT_FLAG("demuxer-lavf-propagate-opts", propagate_opts, 0),
@@ -146,6 +148,7 @@ struct format_hack {
     bool is_network : 1;
     bool no_seek : 1;
     bool no_pcm_seek : 1;
+    bool no_seek_on_no_duration : 1;
 };
 
 #define BLACKLIST(fmt) {fmt, .ignore = true}
@@ -174,6 +177,7 @@ static const struct format_hack format_hacks[] = {
     {"matroska", .skipinfo = true, .no_pcm_seek = true, .use_stream_ids = true},
 
     {"v4l2", .no_seek = true},
+    {"rtsp", .no_seek_on_no_duration = true},
 
     // In theory, such streams might contain timestamps, but virtually none do.
     {"h264", .if_flags = AVFMT_NOTIMESTAMPS },
@@ -237,6 +241,8 @@ typedef struct lavf_priv {
 
     int linearize_ts;
     bool any_ts_fixed;
+
+    int retry_counter;
 
     AVDictionary *av_opts;
 
@@ -796,8 +802,6 @@ static void handle_new_stream(demuxer_t *demuxer, int i)
         if (lang && lang->value && strcmp(lang->value, "und") != 0)
             sh->lang = talloc_strdup(sh, lang->value);
         sh->hls_bitrate = dict_get_decimal(st->metadata, "variant_bitrate", 0);
-        if (!sh->title && sh->hls_bitrate > 0)
-            sh->title = talloc_asprintf(sh, "bitrate %d", sh->hls_bitrate);
         sh->missing_timestamps = !!(priv->avif_flags & AVFMT_NOTIMESTAMPS);
         mp_tags_copy_from_av_dictionary(sh->tags, st->metadata);
         demux_add_sh_stream(demuxer, sh);
@@ -984,6 +988,7 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
         case 1: transport = "udp";  break;
         case 2: transport = "tcp";  break;
         case 3: transport = "http"; break;
+        case 4: transport = "udp_multicast"; break;
         }
         if (transport)
             av_dict_set(&dopts, "rtsp_transport", transport, 0);
@@ -1092,6 +1097,9 @@ static int demux_open_lavf(demuxer_t *demuxer, enum demux_check check)
             demuxer->duration = duration;
     }
 
+    if (demuxer->duration < 0 && priv->format_hack.no_seek_on_no_duration)
+        demuxer->seekable = false;
+
     // In some cases, libavformat will export bogus bullshit timestamps anyway,
     // such as with mjpeg.
     if (priv->avif_flags & AVFMT_NOTIMESTAMPS) {
@@ -1126,13 +1134,17 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
     update_read_stats(demux);
     if (r < 0) {
         av_packet_unref(pkt);
-        if (r == AVERROR(EAGAIN))
-            return true;
         if (r == AVERROR_EOF)
             return false;
         MP_WARN(demux, "error reading packet: %s.\n", av_err2str(r));
-        return false;
+        if (priv->retry_counter >= 10) {
+            MP_ERR(demux, "...treating it as fatal error.\n");
+            return false;
+        }
+        priv->retry_counter += 1;
+        return true;
     }
+    priv->retry_counter = 0;
 
     add_new_streams(demux);
     update_metadata(demux);
@@ -1161,10 +1173,8 @@ static bool demux_lavf_read_packet(struct demuxer *demux,
     dp->duration = pkt->duration * av_q2d(st->time_base);
     dp->pos = pkt->pos;
     dp->keyframe = pkt->flags & AV_PKT_FLAG_KEY;
-#if LIBAVFORMAT_VERSION_MICRO >= 100
     if (pkt->flags & AV_PKT_FLAG_DISCARD)
         MP_ERR(demux, "Edit lists are not correctly supported (FFmpeg issue).\n");
-#endif
     av_packet_unref(pkt);
 
     if (priv->format_hack.clear_filepos)

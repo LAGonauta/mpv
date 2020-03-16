@@ -27,11 +27,11 @@ class RemoteCommandCenter: NSObject {
 
     var config: [MPRemoteCommand:[String:Any]] = [
         MPRemoteCommandCenter.shared().pauseCommand: [
-            "mpKey": MP_KEY_PAUSE,
+            "mpKey": MP_KEY_PAUSEONLY,
             "keyType": KeyType.normal
         ],
         MPRemoteCommandCenter.shared().playCommand: [
-            "mpKey": MP_KEY_PLAY,
+            "mpKey": MP_KEY_PLAYONLY,
             "keyType": KeyType.normal
         ],
         MPRemoteCommandCenter.shared().stopCommand: [
@@ -47,7 +47,7 @@ class RemoteCommandCenter: NSObject {
             "keyType": KeyType.normal
         ],
         MPRemoteCommandCenter.shared().togglePlayPauseCommand: [
-            "mpKey": MP_KEY_PLAYPAUSE,
+            "mpKey": MP_KEY_PLAY,
             "keyType": KeyType.normal
         ],
         MPRemoteCommandCenter.shared().seekForwardCommand: [
@@ -87,21 +87,15 @@ class RemoteCommandCenter: NSObject {
         MPRemoteCommandCenter.shared().bookmarkCommand,
     ]
 
-    let application: Application;
+    var mpInfoCenter: MPNowPlayingInfoCenter { get { return MPNowPlayingInfoCenter.default() } }
+    var isPaused: Bool = false { didSet { updatePlaybackState() } }
 
-    @objc init(app: Application) {
-        application = app
-
+    @objc override init() {
         super.init()
 
         for cmd in disabledCommands {
             cmd.isEnabled = false
         }
-    }
-
-    @objc func makeCurrent() {
-        MPNowPlayingInfoCenter.default().playbackState = .paused
-        MPNowPlayingInfoCenter.default().playbackState = .playing
     }
 
     @objc func start() {
@@ -112,15 +106,24 @@ class RemoteCommandCenter: NSObject {
             }
         }
 
-        if let icon = application.getMPVIcon(), #available(macOS 10.13.2, *) {
-            let albumArt = MPMediaItemArtwork(boundsSize:icon.size) { _ in
+        if let app = NSApp as? Application, let icon = app.getMPVIcon(),
+               #available(macOS 10.13.2, *)
+        {
+            let albumArt = MPMediaItemArtwork(boundsSize: icon.size) { _ in
                 return icon
             }
             nowPlayingInfo[MPMediaItemPropertyArtwork] = albumArt
         }
 
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
-        MPNowPlayingInfoCenter.default().playbackState = .playing
+        mpInfoCenter.nowPlayingInfo = nowPlayingInfo
+        mpInfoCenter.playbackState = .playing
+
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(self.makeCurrent),
+            name: NSApplication.willBecomeActiveNotification,
+            object: nil
+        )
     }
 
     @objc func stop() {
@@ -129,8 +132,18 @@ class RemoteCommandCenter: NSObject {
             cmd.removeTarget(nil)
         }
 
-        MPNowPlayingInfoCenter.default().nowPlayingInfo = nil
-        MPNowPlayingInfoCenter.default().playbackState = .unknown
+        mpInfoCenter.nowPlayingInfo = nil
+        mpInfoCenter.playbackState = .unknown
+    }
+
+    @objc func makeCurrent(notification: NSNotification) {
+        mpInfoCenter.playbackState = .paused
+        mpInfoCenter.playbackState = .playing
+        updatePlaybackState()
+    }
+
+    func updatePlaybackState() {
+        mpInfoCenter.playbackState = isPaused ? .paused : .playing
     }
 
     func cmdHandler(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
@@ -152,8 +165,31 @@ class RemoteCommandCenter: NSObject {
             }
         }
 
-        application.handleMPKey(mpKey, withMask: Int32(state));
+        EventsResponder.sharedInstance().handleMPKey(mpKey, withMask: Int32(state))
 
         return .success
+    }
+
+    @objc func processEvent(_ event: UnsafeMutablePointer<mpv_event>) {
+        switch event.pointee.event_id {
+        case MPV_EVENT_PROPERTY_CHANGE:
+            handlePropertyChange(event)
+        default:
+            break
+        }
+    }
+
+    func handlePropertyChange(_ event: UnsafeMutablePointer<mpv_event>) {
+        let pData = OpaquePointer(event.pointee.data)
+        guard let property = UnsafePointer<mpv_event_property>(pData)?.pointee else {
+            return
+        }
+
+        switch String(cString: property.name) {
+        case "pause" where property.format == MPV_FORMAT_FLAG:
+            isPaused = LibmpvHelper.mpvFlagToBool(property.data) ?? false
+        default:
+            break
+        }
     }
 }

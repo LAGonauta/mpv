@@ -1,6 +1,6 @@
 ---
-name: 'Report a Windows Bug'
-about: 'Create a report for a runtime related Windows Bug'
+name: 'Report a Windows Issue'
+about: 'Create a report for a runtime related Windows Issue'
 title: ''
 labels: 'os:win'
 assignees: ''
@@ -20,6 +20,9 @@ If you're not using git master or the latest release, update.
 Releases are listed here: https://github.com/mpv-player/mpv/releases
 
 ### Reproduction steps
+
+Try to reproduce your issue with --no-config first. If it isn't reproducible
+with --no-config try to first find out which option or script causes your issue.
 
 Describe the reproduction steps as precise as possible. It's very likely that
 the bug you experience wasn't reproduced by the developer because the workflow

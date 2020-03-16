@@ -44,7 +44,6 @@
 
 extern const stream_info_t stream_info_cdda;
 extern const stream_info_t stream_info_dvb;
-extern const stream_info_t stream_info_smb;
 extern const stream_info_t stream_info_null;
 extern const stream_info_t stream_info_memory;
 extern const stream_info_t stream_info_mf;
@@ -52,6 +51,7 @@ extern const stream_info_t stream_info_ffmpeg;
 extern const stream_info_t stream_info_ffmpeg_unsafe;
 extern const stream_info_t stream_info_avdevice;
 extern const stream_info_t stream_info_file;
+extern const stream_info_t stream_info_fd;
 extern const stream_info_t stream_info_ifo_dvdnav;
 extern const stream_info_t stream_info_dvdnav;
 extern const stream_info_t stream_info_bdmv_dir;
@@ -71,9 +71,6 @@ static const stream_info_t *const stream_list[] = {
 #if HAVE_DVBIN
     &stream_info_dvb,
 #endif
-#if HAVE_LIBSMBCLIENT
-    &stream_info_smb,
-#endif
 #if HAVE_DVDNAV
     &stream_info_ifo_dvdnav,
     &stream_info_dvdnav,
@@ -91,6 +88,7 @@ static const stream_info_t *const stream_list[] = {
     &stream_info_mf,
     &stream_info_edl,
     &stream_info_file,
+    &stream_info_fd,
     &stream_info_cb,
     NULL
 };
@@ -720,8 +718,13 @@ bool stream_seek(stream_t *s, int64_t pos)
 // it's a forward-seek.
 bool stream_seek_skip(stream_t *s, int64_t pos)
 {
-    return !s->seekable && pos > stream_tell(s)
-        ? stream_skip_read(s, pos - stream_tell(s))
+    uint64_t cur_pos = stream_tell(s);
+
+    if (cur_pos == pos)
+        return true;
+
+    return !s->seekable && pos > cur_pos
+        ? stream_skip_read(s, pos - cur_pos)
         : stream_seek(s, pos);
 }
 

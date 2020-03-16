@@ -62,13 +62,13 @@ const struct m_sub_options stream_lavf_conf = {
         OPT_STRING("tls-ca-file", tls_ca_file, M_OPT_FILE),
         OPT_STRING("tls-cert-file", tls_cert_file, M_OPT_FILE),
         OPT_STRING("tls-key-file", tls_key_file, M_OPT_FILE),
-        OPT_DOUBLE("network-timeout", timeout, M_OPT_MIN, .min = 0),
+        OPT_DOUBLE("network-timeout", timeout, 0, .min = 0, .max = DBL_MAX),
         OPT_STRING("http-proxy", http_proxy, 0),
         {0}
     },
     .size = sizeof(struct stream_lavf_params),
     .defaults = &(const struct stream_lavf_params){
-        .useragent = (char *)mpv_version,
+        .useragent = "libmpv",
         .timeout = 60,
     },
 };
@@ -81,11 +81,7 @@ static struct mp_tags *read_icy(stream_t *stream);
 static int fill_buffer(stream_t *s, void *buffer, int max_len)
 {
     AVIOContext *avio = s->priv;
-#if LIBAVFORMAT_VERSION_MICRO >= 100 && LIBAVFORMAT_VERSION_INT >= AV_VERSION_INT(57, 81, 100)
     int r = avio_read_partial(avio, buffer, max_len);
-#else
-    int r = avio_read(avio, buffer, max_len);
-#endif
     return (r <= 0) ? -1 : r;
 }
 
@@ -432,7 +428,7 @@ const stream_info_t stream_info_ffmpeg_unsafe = {
   .open = open_f,
   .protocols = (const char *const[]){
      "lavf", "ffmpeg", "udp", "ftp", "tcp", "tls", "unix", "sftp", "md5",
-     "concat",
+     "concat", "smb",
      NULL },
   .stream_origin = STREAM_ORIGIN_UNSAFE,
   .can_write = true,

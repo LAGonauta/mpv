@@ -29,7 +29,7 @@
 #include "audio/format.h"
 
 #include "options/options.h"
-#include "options/m_config.h"
+#include "options/m_config_frontend.h"
 #include "osdep/endian.h"
 #include "common/msg.h"
 #include "common/common.h"
@@ -140,7 +140,7 @@ const struct m_sub_options ao_conf = {
         OPT_STRING("audio-device", audio_device, UPDATE_AUDIO),
         OPT_STRING("audio-client-name", audio_client_name, UPDATE_AUDIO),
         OPT_DOUBLE("audio-buffer", audio_buffer,
-                   UPDATE_AUDIO | M_OPT_MIN | M_OPT_MAX, .min = 0, .max = 10),
+                   UPDATE_AUDIO, .min = 0, .max = 10),
         {0}
     },
     .size = sizeof(OPT_BASE_STRUCT),
@@ -444,10 +444,14 @@ int ao_query_and_reset_events(struct ao *ao, int events)
     return atomic_fetch_and(&ao->events_, ~(unsigned)events) & events;
 }
 
-void ao_add_events(struct ao *ao, int events)
+// Returns events that were set by this calls.
+int ao_add_events(struct ao *ao, int events)
 {
-    atomic_fetch_or(&ao->events_, events);
-    ao->wakeup_cb(ao->wakeup_ctx);
+    unsigned prev_events = atomic_fetch_or(&ao->events_, events);
+    unsigned new = events & ~prev_events;
+    if (new)
+        ao->wakeup_cb(ao->wakeup_ctx);
+    return new;
 }
 
 // Request that the player core destroys and recreates the AO. Fully thread-safe.
@@ -462,12 +466,10 @@ void ao_hotplug_event(struct ao *ao)
     ao_add_events(ao, AO_EVENT_HOTPLUG);
 }
 
-void ao_underrun_event(struct ao *ao)
+// Returns whether this call actually set a new underrun flag.
+bool ao_underrun_event(struct ao *ao)
 {
-    // Racy check, but it's just for the message.
-    if (!(atomic_load(&ao->events_) & AO_EVENT_UNDERRUN))
-        MP_WARN(ao, "Device underrun detected.\n");
-    ao_add_events(ao, AO_EVENT_UNDERRUN);
+    return ao_add_events(ao, AO_EVENT_UNDERRUN);
 }
 
 bool ao_chmap_sel_adjust(struct ao *ao, const struct mp_chmap_sel *s,
@@ -528,11 +530,6 @@ const char *ao_get_name(struct ao *ao)
 const char *ao_get_description(struct ao *ao)
 {
     return ao->driver->description;
-}
-
-bool ao_get_reports_underruns(struct ao *ao)
-{
-    return ao->driver->reports_underruns;
 }
 
 bool ao_untimed(struct ao *ao)

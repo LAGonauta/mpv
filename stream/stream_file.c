@@ -75,9 +75,14 @@ struct priv {
 static int64_t get_size(stream_t *s)
 {
     struct priv *p = s->priv;
-    off_t size = lseek(p->fd, 0, SEEK_END);
-    lseek(p->fd, s->pos, SEEK_SET);
-    return size == (off_t)-1 ? -1 : size;
+    struct stat st;
+    if (fstat(p->fd, &st) == 0) {
+        if (st.st_size <= 0 && !s->seekable)
+            st.st_size = -1;
+        if (st.st_size >= 0)
+            return st.st_size;
+    }
+    return -1;
 }
 
 static int fill_buffer(stream_t *s, void *buffer, int max_len)
@@ -245,7 +250,7 @@ static int open_f(stream_t *stream)
 {
     struct priv *p = talloc_ptrtype(stream, p);
     *p = (struct priv) {
-        .fd = -1
+        .fd = -1,
     };
     stream->priv = p;
     stream->is_local_file = true;
@@ -346,8 +351,15 @@ static int open_f(stream_t *stream)
 const stream_info_t stream_info_file = {
     .name = "file",
     .open = open_f,
-    .protocols = (const char*const[]){ "file", "", "fd", "fdclose",
-                                       "appending", NULL },
+    .protocols = (const char*const[]){ "file", "", "appending", NULL },
     .can_write = true,
     .stream_origin = STREAM_ORIGIN_FS,
+};
+
+const stream_info_t stream_info_fd = {
+    .name = "fd",
+    .open = open_f,
+    .protocols = (const char*const[]){ "fd", "fdclose", NULL },
+    .can_write = true,
+    .stream_origin = STREAM_ORIGIN_UNSAFE,
 };

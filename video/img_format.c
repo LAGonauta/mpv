@@ -37,6 +37,8 @@ static const struct mp_imgfmt_entry mp_imgfmt_list[] = {
     // not in ffmpeg
     {"vdpau_output",    IMGFMT_VDPAU_OUTPUT},
     {"rgb30",           IMGFMT_RGB30},
+    {"yap8",            IMGFMT_YAP8},
+    {"yap16",           IMGFMT_YAP16},
     // FFmpeg names have an annoying "_vld" suffix
     {"videotoolbox",    IMGFMT_VIDEOTOOLBOX},
     {"vaapi",           IMGFMT_VAAPI},
@@ -120,6 +122,34 @@ static struct mp_imgfmt_desc mp_only_imgfmt_desc(int mpfmt)
             .bpp = {32},
             .plane_bits = 30,
             .component_bits = 10,
+        };
+    case IMGFMT_YAP8:
+        return (struct mp_imgfmt_desc) {
+            .id = mpfmt,
+            .avformat = AV_PIX_FMT_NONE,
+            .flags = MP_IMGFLAG_BYTE_ALIGNED | MP_IMGFLAG_NE | MP_IMGFLAG_YUV |
+                     MP_IMGFLAG_YUV_P,
+            .num_planes = 2,
+            .align_x = 1,
+            .align_y = 1,
+            .bytes = {1, 1},
+            .bpp = {8, 8},
+            .plane_bits = 8,
+            .component_bits = 8,
+        };
+    case IMGFMT_YAP16:
+        return (struct mp_imgfmt_desc) {
+            .id = mpfmt,
+            .avformat = AV_PIX_FMT_NONE,
+            .flags = MP_IMGFLAG_BYTE_ALIGNED | MP_IMGFLAG_NE | MP_IMGFLAG_YUV |
+                     MP_IMGFLAG_YUV_P,
+            .num_planes = 2,
+            .align_x = 1,
+            .align_y = 1,
+            .bytes = {2, 2},
+            .bpp = {16, 16},
+            .plane_bits = 16,
+            .component_bits = 16,
         };
     }
     return (struct mp_imgfmt_desc) {0};
@@ -336,7 +366,9 @@ enum mp_csp mp_imgfmt_get_forced_csp(int imgfmt)
 
 enum mp_component_type mp_imgfmt_get_component_type(int imgfmt)
 {
-    if (imgfmt == IMGFMT_RGB30)
+    if (imgfmt == IMGFMT_RGB30 ||
+        imgfmt == IMGFMT_YAP8 ||
+        imgfmt == IMGFMT_YAP16)
         return MP_COMPONENT_TYPE_UINT;
 
     const AVPixFmtDescriptor *pixdesc =
@@ -345,10 +377,8 @@ enum mp_component_type mp_imgfmt_get_component_type(int imgfmt)
     if (!pixdesc || (pixdesc->flags & AV_PIX_FMT_FLAG_HWACCEL))
         return MP_COMPONENT_TYPE_UNKNOWN;
 
-#if LIBAVUTIL_VERSION_MICRO >= 100
     if (pixdesc->flags & AV_PIX_FMT_FLAG_FLOAT)
         return MP_COMPONENT_TYPE_FLOAT;
-#endif
 
     return MP_COMPONENT_TYPE_UINT;
 }
@@ -363,6 +393,39 @@ static bool is_native_endian(const AVPixFmtDescriptor *pixdesc)
     return pixdesc && (is_le != !!(pixdesc->flags & AV_PIX_FMT_FLAG_BE));
 }
 
+static bool mp_only_regular_imgfmt(struct mp_regular_imgfmt *dst, int imgfmt)
+{
+    switch (imgfmt) {
+    case IMGFMT_YAP8:
+        *dst = (struct mp_regular_imgfmt) {
+            .component_type = MP_COMPONENT_TYPE_UINT,
+            .component_size = 1,
+            .num_planes = 2,
+            .planes = {
+                {.num_components = 1, .components = {1}},
+                {.num_components = 1, .components = {4}},
+            },
+            .chroma_w = 1,
+            .chroma_h = 1,
+        };
+        return true;
+    case IMGFMT_YAP16:
+        *dst = (struct mp_regular_imgfmt) {
+            .component_type = MP_COMPONENT_TYPE_UINT,
+            .component_size = 2,
+            .num_planes = 2,
+            .planes = {
+                {.num_components = 1, .components = {1}},
+                {.num_components = 1, .components = {4}},
+            },
+            .chroma_w = 1,
+            .chroma_h = 1,
+        };
+        return true;
+    }
+    return false;
+}
+
 bool mp_get_regular_imgfmt(struct mp_regular_imgfmt *dst, int imgfmt)
 {
     struct mp_regular_imgfmt res = {0};
@@ -370,7 +433,10 @@ bool mp_get_regular_imgfmt(struct mp_regular_imgfmt *dst, int imgfmt)
     const AVPixFmtDescriptor *pixdesc =
         av_pix_fmt_desc_get(imgfmt2pixfmt(imgfmt));
 
-    if (!pixdesc || (pixdesc->flags & AV_PIX_FMT_FLAG_BITSTREAM) ||
+    if (!pixdesc)
+        return mp_only_regular_imgfmt(dst, imgfmt);
+
+    if ((pixdesc->flags & AV_PIX_FMT_FLAG_BITSTREAM) ||
         (pixdesc->flags & AV_PIX_FMT_FLAG_HWACCEL) ||
         (pixdesc->flags & AV_PIX_FMT_FLAG_PAL) ||
         pixdesc->nb_components < 1 ||
@@ -441,10 +507,8 @@ bool mp_get_regular_imgfmt(struct mp_regular_imgfmt *dst, int imgfmt)
     res.chroma_w = 1 << pixdesc->log2_chroma_w;
     res.chroma_h = 1 << pixdesc->log2_chroma_h;
 
-#if LIBAVUTIL_VERSION_MICRO >= 100
     if (pixdesc->flags & AV_PIX_FMT_FLAG_BAYER)
         return false; // it's satan himself
-#endif
 
     res.forced_csp = mp_imgfmt_get_forced_csp(imgfmt);
 
@@ -505,10 +569,6 @@ int mp_imgfmt_find(int xs, int ys, int planes, int component_bits, int flags)
     }
     return 0;
 }
-
-#if LIBAVUTIL_VERSION_MICRO < 100
-#define avcodec_find_best_pix_fmt_of_list avcodec_find_best_pix_fmt2
-#endif
 
 // Compare the dst image formats, and return the one which can carry more data
 // (e.g. higher depth, more color components, lower chroma subsampling, etc.),

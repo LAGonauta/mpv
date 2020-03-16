@@ -144,7 +144,7 @@ void mp_print_version(struct mp_log *log, int always)
     int v = always ? MSGL_INFO : MSGL_V;
     mp_msg(log, v, "%s %s\n built on %s\n",
            mpv_version, mpv_copyright, mpv_builddate);
-    print_libav_versions(log, v);
+    check_library_versions(log, v);
     mp_msg(log, v, "\n");
     // Only in verbose mode.
     if (!always) {
@@ -201,22 +201,6 @@ static bool handle_help_options(struct MPContext *mpctx)
 {
     struct MPOpts *opts = mpctx->opts;
     struct mp_log *log = mpctx->log;
-    if (opts->audio_decoders && strcmp(opts->audio_decoders, "help") == 0) {
-        struct mp_decoder_list *list = audio_decoder_list();
-        mp_print_decoders(log, MSGL_INFO, "Audio decoders:", list);
-        talloc_free(list);
-        return true;
-    }
-    if (opts->audio_spdif && strcmp(opts->audio_spdif, "help") == 0) {
-        MP_INFO(mpctx, "Choices: ac3,dts-hd,dts (and possibly more)\n");
-        return true;
-    }
-    if (opts->video_decoders && strcmp(opts->video_decoders, "help") == 0) {
-        struct mp_decoder_list *list = video_decoder_list();
-        mp_print_decoders(log, MSGL_INFO, "Video decoders:", list);
-        talloc_free(list);
-        return true;
-    }
     if ((opts->demuxer_name && strcmp(opts->demuxer_name, "help") == 0) ||
         (opts->audio_demuxer_name && strcmp(opts->audio_demuxer_name, "help") == 0) ||
         (opts->sub_demuxer_name && strcmp(opts->sub_demuxer_name, "help") == 0)) {
@@ -387,17 +371,7 @@ int mp_initialize(struct MPContext *mpctx, char **options)
     if (handle_help_options(mpctx))
         return 1; // help
 
-    if (!print_libav_versions(mp_null_log, 0)) {
-        // This happens only if the runtime FFmpeg version is lower than the
-        // build version, which will not work according to FFmpeg's ABI rules.
-        // This does not happen if runtime FFmpeg is newer, which is compatible.
-        print_libav_versions(mpctx->log, MSGL_FATAL);
-        MP_FATAL(mpctx, "\nmpv was compiled against an incompatible version of "
-                 "FFmpeg/Libav than the shared\nlibrary it is linked against. "
-                 "This is most likely a broken build and could\nresult in "
-                 "misbehavior and crashes.\n\nThis is a broken build.\n");
-        return -1;
-    }
+    check_library_versions(mp_null_log, 0);
 
 #if HAVE_TESTS
     if (opts->test_mode && opts->test_mode[0])

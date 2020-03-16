@@ -1,6 +1,6 @@
 ---
-name: 'Report a Bug for a different Platform'
-about: 'Create a report for a runtime related Bug'
+name: 'Report a different Issue'
+about: 'Create a report for a runtime related Issue'
 title: ''
 labels: ''
 assignees: ''
@@ -18,6 +18,9 @@ If you're not using git master or the latest release, update.
 Releases are listed here: https://github.com/mpv-player/mpv/releases
 
 ### Reproduction steps
+
+Try to reproduce your issue with --no-config first. If it isn't reproducible
+with --no-config try to first find out which option or script causes your issue.
 
 Describe the reproduction steps as precise as possible. It's very likely that
 the bug you experience wasn't reproduced by the developer because the workflow
