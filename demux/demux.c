@@ -106,41 +106,40 @@ struct demux_opts {
 
 #define OPT_BASE_STRUCT struct demux_opts
 
-#define MAX_BYTES MPMIN(INT64_MAX, SIZE_MAX / 2)
-
 static bool get_demux_sub_opts(int index, const struct m_sub_options **sub);
 
 const struct m_sub_options demux_conf = {
     .opts = (const struct m_option[]){
-        OPT_CHOICE("cache", enable_cache, 0,
-                   ({"no", 0}, {"auto", -1}, {"yes", 1})),
-        OPT_FLAG("cache-on-disk", disk_cache, 0),
-        OPT_DOUBLE("demuxer-readahead-secs", min_secs, 0,
-                   .min = 0, .max = DBL_MAX),
-        // (The MAX_BYTES sizes may not be accurate because the max field is
-        // of double type.)
-        OPT_BYTE_SIZE("demuxer-max-bytes", max_bytes, 0, 0, MAX_BYTES),
-        OPT_BYTE_SIZE("demuxer-max-back-bytes", max_bytes_bw, 0, 0, MAX_BYTES),
-        OPT_FLAG("demuxer-donate-buffer", donate_fw, 0),
-        OPT_FLAG("force-seekable", force_seekable, 0),
-        OPT_DOUBLE("cache-secs", min_secs_cache, 0, .min = 0, .max = DBL_MAX,
-                   .deprecation_message = "will use unlimited time"),
-        OPT_FLAG("access-references", access_references, 0),
-        OPT_CHOICE("demuxer-seekable-cache", seekable_cache, 0,
-                   ({"auto", -1}, {"no", 0}, {"yes", 1})),
-        OPT_FLAG("sub-create-cc-track", create_ccs, 0),
-        OPT_STRING("stream-record", record_file, 0),
-        OPT_CHOICE_OR_INT("video-backward-overlap", video_back_preroll, 0, 0,
-                          1024, ({"auto", -1})),
-        OPT_CHOICE_OR_INT("audio-backward-overlap", audio_back_preroll, 0, 0,
-                          1024, ({"auto", -1})),
-        OPT_INTRANGE("video-backward-batch", back_batch[STREAM_VIDEO], 0, 0, 1024),
-        OPT_INTRANGE("audio-backward-batch", back_batch[STREAM_AUDIO], 0, 0, 1024),
-        OPT_DOUBLE("demuxer-backward-playback-step", back_seek_size, 0,
-                   .min = 0, .max = DBL_MAX),
-        OPT_STRING("metadata-codepage", meta_cp, 0),
-        OPT_FLAG("demuxer-force-retry-on-eof", force_retry_eof, 0,
-                 .deprecation_message = "temporary debug option, no replacement"),
+        {"cache", OPT_CHOICE(enable_cache,
+            {"no", 0}, {"auto", -1}, {"yes", 1})},
+        {"cache-on-disk", OPT_FLAG(disk_cache)},
+        {"demuxer-readahead-secs", OPT_DOUBLE(min_secs), M_RANGE(0, DBL_MAX)},
+        {"demuxer-max-bytes", OPT_BYTE_SIZE(max_bytes),
+            M_RANGE(0, M_MAX_MEM_BYTES)},
+        {"demuxer-max-back-bytes", OPT_BYTE_SIZE(max_bytes_bw),
+            M_RANGE(0, M_MAX_MEM_BYTES)},
+        {"demuxer-donate-buffer", OPT_FLAG(donate_fw)},
+        {"force-seekable", OPT_FLAG(force_seekable)},
+        {"cache-secs", OPT_DOUBLE(min_secs_cache), M_RANGE(0, DBL_MAX),
+            .deprecation_message = "will use unlimited time"},
+        {"access-references", OPT_FLAG(access_references)},
+        {"demuxer-seekable-cache", OPT_CHOICE(seekable_cache,
+            {"auto", -1}, {"no", 0}, {"yes", 1})},
+        {"sub-create-cc-track", OPT_FLAG(create_ccs)},
+        {"stream-record", OPT_STRING(record_file)},
+        {"video-backward-overlap", OPT_CHOICE(video_back_preroll, {"auto", -1}),
+            M_RANGE(0, 1024)},
+        {"audio-backward-overlap", OPT_CHOICE(audio_back_preroll, {"auto", -1}),
+            M_RANGE(0, 1024)},
+        {"video-backward-batch", OPT_INT(back_batch[STREAM_VIDEO]),
+            M_RANGE(0, 1024)},
+        {"audio-backward-batch", OPT_INT(back_batch[STREAM_AUDIO]),
+            M_RANGE(0, 1024)},
+        {"demuxer-backward-playback-step", OPT_DOUBLE(back_seek_size),
+            M_RANGE(0, DBL_MAX)},
+        {"metadata-codepage", OPT_STRING(meta_cp)},
+        {"demuxer-force-retry-on-eof", OPT_FLAG(force_retry_eof),
+         .deprecation_message = "temporary debug option, no replacement"},
         {0}
     },
     .size = sizeof(struct demux_opts),
@@ -273,6 +272,7 @@ struct demux_internal {
     // Cached state.
     int64_t stream_size;
     int64_t last_speed_query;
+    double speed_query_prev_sample;
     uint64_t bytes_per_second;
     int64_t next_cache_update;
 
@@ -4109,7 +4109,10 @@ static void update_cache(struct demux_internal *in)
         uint64_t bytes = in->cache_unbuffered_read_bytes;
         in->cache_unbuffered_read_bytes = 0;
         in->last_speed_query = now;
-        in->bytes_per_second = bytes / (diff / (double)MP_SECOND_US);
+        double speed = bytes / (diff / (double)MP_SECOND_US);
+        in->bytes_per_second = 0.5 * in->speed_query_prev_sample +
+                               0.5 * speed;
+        in->speed_query_prev_sample = speed;
     }
     // The idea is to update as long as there is "activity".
     if (in->bytes_per_second)

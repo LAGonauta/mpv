@@ -256,12 +256,9 @@ def build(ctx):
         ( "audio/out/ao_openal.c",               "openal" ),
         ( "audio/out/ao_loadopenal.c",           "openal" ),
         ( "audio/out/ao_opensles.c",             "opensles" ),
-        ( "audio/out/ao_oss.c",                  "oss-audio" ),
         ( "audio/out/ao_pcm.c" ),
         ( "audio/out/ao_pulse.c",                "pulse" ),
-        ( "audio/out/ao_rsound.c",               "rsound" ),
         ( "audio/out/ao_sdl.c",                  "sdl2-audio" ),
-        ( "audio/out/ao_sndio.c",                "sndio" ),
         ( "audio/out/ao_wasapi.c",               "wasapi" ),
         ( "audio/out/ao_wasapi_changenotify.c",  "wasapi" ),
         ( "audio/out/ao_wasapi_utils.c",         "wasapi" ),
@@ -323,7 +320,6 @@ def build(ctx):
         ( "input/ipc.c" ),
         ( ipc_c ),
         ( "input/keycodes.c" ),
-        ( "input/pipe-win32.c",                  "win32-pipes" ),
         ( "input/sdl_gamepad.c",                 "sdl2-gamepad" ),
 
         ## Misc
@@ -387,7 +383,7 @@ def build(ctx):
         ( "stream/stream_null.c" ),
 
         ## Subtitles
-        ( "sub/ass_mp.c",                        "libass"),
+        ( "sub/ass_mp.c" ),
         ( "sub/dec_sub.c" ),
         ( "sub/draw_bmp.c" ),
         ( "sub/filter_regex.c",                  "posix" ),
@@ -395,9 +391,8 @@ def build(ctx):
         ( "sub/img_convert.c" ),
         ( "sub/lavc_conv.c" ),
         ( "sub/osd.c" ),
-        ( "sub/osd_dummy.c",                     "dummy-osd" ),
-        ( "sub/osd_libass.c",                    "libass-osd" ),
-        ( "sub/sd_ass.c",                        "libass" ),
+        ( "sub/osd_libass.c" ),
+        ( "sub/sd_ass.c" ),
         ( "sub/sd_lavc.c" ),
 
         ## Tests

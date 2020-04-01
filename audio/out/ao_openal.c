@@ -441,10 +441,10 @@ const struct ao_driver audio_out_openal = {
         .force_xram = 0,
     },
     .options = (const struct m_option[]) {
-        OPT_INTRANGE("num-buffers", num_buffers, 0, 2, MAX_BUF),
-        OPT_INTRANGE("max-buffered-milliseconds", max_milliseconds, 0, 8, MAX_MILLISECONDS),
-        OPT_FLAG("direct-channels", direct_channels, 0),
-        OPT_FLAG("force-xram", force_xram, 0),
+        {"num-buffers", OPT_INT(num_buffers), M_RANGE(2, MAX_BUF)},
+        {"max-buffered-milliseconds", OPT_INT(max_milliseconds), M_RANGE(8, MAX_MILLISECONDS)},
+        {"direct-channels", OPT_FLAG(direct_channels)},
+        {"force-xram", OPT_FLAG(force_xram)},
         {0}
     },
     .options_prefix = "openal",

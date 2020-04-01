@@ -206,6 +206,15 @@ main_dependencies = [
         'req': True,
         'fmsg': 'Unable to find pthreads support.'
     }, {
+        # NB: this works only if a source file includes osdep/threads.h
+        #     also, technically, triggers undefined behavior (reserved names)
+        'name': '--pthread-debug',
+        'desc': 'pthread runtime debugging wrappers',
+        'default': 'disable',
+        'func': check_cc(cflags='-DMP_PTHREAD_DEBUG'),
+        # The win32 wrapper defines pthreads symbols as macros only.
+        'deps_neg': 'win32-internal-pthreads',
+    }, {
         'name': '--stdatomic',
         'desc': 'C11 stdatomic.h',
         'func': check_libs(['atomic'],
@@ -253,11 +262,6 @@ iconv support use --disable-iconv.",
         'desc': 'any spawnp()/kill() support',
         'deps': 'posix-spawn-native || posix-spawn-android',
         'func': check_true,
-    }, {
-        'name': 'win32-pipes',
-        'desc': 'Windows pipe support',
-        'func': check_true,
-        'deps': 'win32-desktop && !posix',
     }, {
         'name': 'glob-posix',
         'desc': 'glob() POSIX support',
@@ -327,24 +331,13 @@ iconv support use --disable-iconv.",
         'desc' : 'Javascript (MuJS backend)',
         'func': check_pkg_config('mujs', '>= 1.0.0'),
     }, {
-        'name': '--libass',
+        'name': 'libass',
         'desc': 'SSA/ASS support',
         'func': check_pkg_config('libass', '>= 0.12.1'),
         'req': True,
         'fmsg': "Unable to find development files for libass, or the version " +
-                "found is too old. Aborting. If you really mean to compile " +
-                "without libass support use --disable-libass."
+                "found is too old. Aborting."
     }, {
-        'name': '--libass-osd',
-        'desc': 'libass OSD support',
-        'deps': 'libass',
-        'func': check_true,
-    }, {
-        'name': 'dummy-osd',
-        'desc': 'dummy OSD support',
-        'deps': '!libass-osd',
-        'func': check_true,
-    } , {
         'name': '--zlib',
         'desc': 'zlib',
         'func': check_libs(['z'],
@@ -446,21 +439,6 @@ audio_output_features = [
         'desc': 'SDL2 audio output',
         'deps': 'sdl2',
         'func': check_true,
-    }, {
-        'name': '--oss-audio',
-        'desc': 'OSS',
-        'func': check_cc(header_name='sys/soundcard.h'),
-        'deps': 'posix && gpl',
-    }, {
-        'name': '--rsound',
-        'desc': 'RSound audio output',
-        'func': check_statement('rsound.h', 'rsd_init(NULL)', lib='rsound')
-    }, {
-        'name': '--sndio',
-        'desc': 'sndio audio input/output',
-        'func': check_statement('sndio.h',
-            'struct sio_par par; sio_initpar(&par); const char *s = SIO_DEVANY', lib='sndio'),
-        'default': 'disable'
     }, {
         'name': '--pulse',
         'desc': 'PulseAudio audio output',

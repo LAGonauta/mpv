@@ -77,6 +77,7 @@ struct mp_client_api {
     // used to safely unlock mp_client_api.lock while iterating the list of
     // clients.
     uint64_t clients_list_change_ts;
+    int64_t id_alloc;
 
     struct mp_custom_protocol *custom_protocols;
     int num_custom_protocols;
@@ -111,6 +112,7 @@ struct mpv_handle {
     struct mp_log *log;
     struct MPContext *mpctx;
     struct mp_client_api *clients;
+    int64_t id;
 
     // -- not thread-safe
     struct mpv_event *cur_event;
@@ -223,20 +225,39 @@ bool mp_clients_all_initialized(struct MPContext *mpctx)
     return all_ok;
 }
 
-static struct mpv_handle *find_client(struct mp_client_api *clients,
-                                      const char *name)
+static struct mpv_handle *find_client_id(struct mp_client_api *clients, int64_t id)
 {
     for (int n = 0; n < clients->num_clients; n++) {
-        if (strcmp(clients->clients[n]->name, name) == 0)
+        if (clients->clients[n]->id == id)
             return clients->clients[n];
     }
     return NULL;
 }
 
-bool mp_client_exists(struct MPContext *mpctx, const char *client_name)
+static struct mpv_handle *find_client(struct mp_client_api *clients,
+                                      const char *name)
+{
+    if (name[0] == '@') {
+        char *end;
+        errno = 0;
+        long long int id = strtoll(name + 1, &end, 10);
+        if (errno || end[0])
+            return NULL;
+        return find_client_id(clients, id);
+    }
+
+    for (int n = 0; n < clients->num_clients; n++) {
+        if (strcmp(clients->clients[n]->name, name) == 0)
+            return clients->clients[n];
+    }
+
+    return NULL;
+}
+
+bool mp_client_id_exists(struct MPContext *mpctx, int64_t id)
 {
     pthread_mutex_lock(&mpctx->clients->lock);
-    bool r = find_client(mpctx->clients, client_name);
+    bool r = find_client_id(mpctx->clients, id);
     pthread_mutex_unlock(&mpctx->clients->lock);
     return r;
 }
@@ -271,6 +292,7 @@ struct mpv_handle *mp_new_client(struct mp_client_api *clients, const char *name
         .log = mp_log_new(client, clients->mpctx->log, nname),
         .mpctx = clients->mpctx,
         .clients = clients,
+        .id = ++(clients->id_alloc),
         .cur_event = talloc_zero(client, struct mpv_event),
         .events = talloc_array(client, mpv_event, num_events),
         .max_events = num_events,
@@ -306,6 +328,11 @@ void mp_client_set_weak(struct mpv_handle *ctx)
 const char *mpv_client_name(mpv_handle *ctx)
 {
     return ctx->name;
+}
+
+int64_t mpv_client_id(mpv_handle *ctx)
+{
+    return ctx->id;
 }
 
 struct mp_log *mp_client_get_log(struct mpv_handle *ctx)
@@ -676,6 +703,9 @@ static void dup_event_data(struct mpv_event *ev)
         ev->data = msg;
         break;
     }
+    case MPV_EVENT_START_FILE:
+        ev->data = talloc_memdup(NULL, ev->data, sizeof(mpv_event_start_file));
+        break;
     case MPV_EVENT_END_FILE:
         ev->data = talloc_memdup(NULL, ev->data, sizeof(mpv_event_end_file));
         break;
@@ -833,6 +863,18 @@ int mp_client_send_event_dup(struct MPContext *mpctx, const char *client_name,
     return mp_client_send_event(mpctx, client_name, 0, event, event_data.data);
 }
 
+static bool deprecated_events[] = {
+    [MPV_EVENT_TRACKS_CHANGED] = true,
+    [MPV_EVENT_TRACK_SWITCHED] = true,
+    [MPV_EVENT_IDLE] = true,
+    [MPV_EVENT_PAUSE] = true,
+    [MPV_EVENT_UNPAUSE] = true,
+    [MPV_EVENT_TICK] = true,
+    [MPV_EVENT_SCRIPT_INPUT_DISPATCH] = true,
+    [MPV_EVENT_METADATA_UPDATE] = true,
+    [MPV_EVENT_CHAPTER_CHANGE] = true,
+};
+
 int mpv_request_event(mpv_handle *ctx, mpv_event_id event, int enable)
 {
     if (!mpv_event_name(event) || enable < 0 || enable > 1)
@@ -843,8 +885,12 @@ int mpv_request_event(mpv_handle *ctx, mpv_event_id event, int enable)
     pthread_mutex_lock(&ctx->lock);
     uint64_t bit = 1ULL << event;
     ctx->event_mask = enable ? ctx->event_mask | bit : ctx->event_mask & ~bit;
-    if (enable && event == MPV_EVENT_TICK)
-        MP_WARN(ctx, "The 'tick' event is deprecated and will be removed.\n");
+    if (enable && event < MP_ARRAY_SIZE(deprecated_events) &&
+        deprecated_events[event])
+    {
+        MP_WARN(ctx, "The '%s' event is deprecated and will be removed.\n",
+                mpv_event_name(event));
+    }
     pthread_mutex_unlock(&ctx->lock);
     return 0;
 }
@@ -985,7 +1031,9 @@ static bool conv_node_to_format(void *dst, mpv_format dst_fmt, mpv_node *src)
         return true;
     }
     if (dst_fmt == MPV_FORMAT_INT64 && src->format == MPV_FORMAT_DOUBLE) {
-        if (src->u.double_ >= INT64_MIN && src->u.double_ <= INT64_MAX) {
+        if (src->u.double_ > (double)INT64_MIN &&
+            src->u.double_ < (double)INT64_MAX)
+        {
             *(int64_t *)dst = src->u.double_;
             return true;
         }
@@ -1777,7 +1825,7 @@ int mpv_hook_add(mpv_handle *ctx, uint64_t reply_userdata,
                  const char *name, int priority)
 {
     lock_core(ctx);
-    mp_hook_add(ctx->mpctx, ctx->name, name, reply_userdata, priority);
+    mp_hook_add(ctx->mpctx, ctx->name, ctx->id, name, reply_userdata, priority);
     unlock_core(ctx);
     return 0;
 }
@@ -1785,7 +1833,7 @@ int mpv_hook_add(mpv_handle *ctx, uint64_t reply_userdata,
 int mpv_hook_continue(mpv_handle *ctx, uint64_t id)
 {
     lock_core(ctx);
-    int r = mp_hook_continue(ctx->mpctx, ctx->name, id);
+    int r = mp_hook_continue(ctx->mpctx, ctx->id, id);
     unlock_core(ctx);
     return r;
 }
@@ -1890,6 +1938,119 @@ int mpv_get_wakeup_pipe(mpv_handle *ctx)
 unsigned long mpv_client_api_version(void)
 {
     return MPV_CLIENT_API_VERSION;
+}
+
+int mpv_event_to_node(mpv_node *dst, mpv_event *event)
+{
+    *dst = (mpv_node){0};
+
+    node_init(dst, MPV_FORMAT_NODE_MAP, NULL);
+    node_map_add_string(dst, "event", mpv_event_name(event->event_id));
+
+    if (event->error < 0)
+        node_map_add_string(dst, "error", mpv_error_string(event->error));
+
+    if (event->reply_userdata)
+        node_map_add_int64(dst, "id", event->reply_userdata);
+
+    switch (event->event_id) {
+
+    case MPV_EVENT_START_FILE: {
+        mpv_event_start_file *esf = event->data;
+
+        node_map_add_int64(dst, "playlist_entry_id", esf->playlist_entry_id);
+        break;
+    }
+
+    case MPV_EVENT_END_FILE: {
+        mpv_event_end_file *eef = event->data;
+
+        const char *reason;
+        switch (eef->reason) {
+        case MPV_END_FILE_REASON_EOF: reason = "eof"; break;
+        case MPV_END_FILE_REASON_STOP: reason = "stop"; break;
+        case MPV_END_FILE_REASON_QUIT: reason = "quit"; break;
+        case MPV_END_FILE_REASON_ERROR: reason = "error"; break;
+        case MPV_END_FILE_REASON_REDIRECT: reason = "redirect"; break;
+        default:
+            reason = "unknown";
+        }
+        node_map_add_string(dst, "reason", reason);
+
+        node_map_add_int64(dst, "playlist_entry_id", eef->playlist_entry_id);
+
+        if (eef->playlist_insert_id) {
+            node_map_add_int64(dst, "playlist_insert_id", eef->playlist_insert_id);
+            node_map_add_int64(dst, "playlist_insert_num_entries",
+                               eef->playlist_insert_num_entries);
+        }
+
+        if (eef->reason == MPV_END_FILE_REASON_ERROR)
+            node_map_add_string(dst, "file_error", mpv_error_string(eef->error));
+        break;
+    }
+
+    case MPV_EVENT_LOG_MESSAGE: {
+        mpv_event_log_message *msg = event->data;
+
+        node_map_add_string(dst, "prefix", msg->prefix);
+        node_map_add_string(dst, "level",  msg->level);
+        node_map_add_string(dst, "text",   msg->text);
+        break;
+    }
+
+    case MPV_EVENT_CLIENT_MESSAGE: {
+        mpv_event_client_message *msg = event->data;
+
+        struct mpv_node *args = node_map_add(dst, "args", MPV_FORMAT_NODE_ARRAY);
+        for (int n = 0; n < msg->num_args; n++) {
+            struct mpv_node *sn = node_array_add(args, MPV_FORMAT_NONE);
+            sn->format = MPV_FORMAT_STRING;
+            sn->u.string = (char *)msg->args[n];
+        }
+        break;
+    }
+
+    case MPV_EVENT_PROPERTY_CHANGE: {
+        mpv_event_property *prop = event->data;
+
+        node_map_add_string(dst, "name", prop->name);
+
+        switch (prop->format) {
+        case MPV_FORMAT_NODE:
+            *node_map_add(dst, "data", MPV_FORMAT_NONE) =
+                *(struct mpv_node *)prop->data;
+            break;
+        case MPV_FORMAT_DOUBLE:
+            node_map_add_double(dst, "data", *(double *)prop->data);
+            break;
+        case MPV_FORMAT_FLAG:
+            node_map_add_flag(dst, "data", *(int *)prop->data);
+            break;
+        case MPV_FORMAT_STRING:
+            node_map_add_string(dst, "data", *(char **)prop->data);
+            break;
+        default: ;
+        }
+        break;
+    }
+
+    case MPV_EVENT_COMMAND_REPLY: {
+        mpv_event_command *cmd = event->data;
+
+        *node_map_add(dst, "result", MPV_FORMAT_NONE) = cmd->result;
+        break;
+    }
+
+    case MPV_EVENT_HOOK: {
+        mpv_event_hook *hook = event->data;
+
+        node_map_add_int64(dst, "hook_id", hook->id);
+        break;
+    }
+
+    }
+    return 0;
 }
 
 static const char *const err_table[] = {

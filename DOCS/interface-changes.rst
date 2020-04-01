@@ -45,6 +45,21 @@ Interface changes
       notifications were interleaved in bad ways (it could happen that a
       property notification delivered after an event contained a value that was
       valid only before the event happened).
+    - the playlist-pos and playlist-pos-1 properties now can return and accept
+      -1, and are never unavailable. Out of range indexes are now accepted, but
+      behave like writing -1.
+    - the playlist-pos and playlist-pos-1 properties deprecate the current
+      behavior when writing back the current value to the property: currently,
+      this restarts playback, but in the future, it will do nothing.
+      Using the "playlist-play-index" command is recommended instead.
+    - add "playlist-play-index" command
+    - add playlist-current-pos, playlist-playing-pos properties
+    - Lua end-file events set the "error" field; this is deprecated; use the
+      "file_error" instead for this specific event. Scripts relying on the
+      "error" field for end-file will silently break at some point in the
+      future.
+    - deprecate encoding mode (lack of maintainer)
+    - remove deprecated --input-file option
  --- mpv 0.32.0 ---
     - change behavior when using legacy option syntax with options that start
       with two dashes (``--`` instead of a ``-``). Now, using the recommended

@@ -43,7 +43,7 @@ enum stop_play_reason {
                         // also returned on unrecoverable playback errors
     PT_NEXT_ENTRY,      // prepare to play next entry in playlist
     PT_CURRENT_ENTRY,   // prepare to play mpctx->playlist->current
-    PT_STOP,            // stop playback, or transient state when going to next
+    PT_STOP,            // stop playback / idle mode
     PT_QUIT,            // stop playback, quit player
     PT_ERROR,           // play next playlist entry (due to an error)
 };
@@ -444,6 +444,8 @@ typedef struct MPContext {
 
     struct mp_ipc_ctx *ipc_ctx;
 
+    int64_t builtin_script_ids[4];
+
     pthread_mutex_t abort_lock;
 
     // --- The following fields are protected by abort_lock
@@ -632,7 +634,7 @@ struct mp_scripting {
 };
 bool mp_load_scripts(struct MPContext *mpctx);
 void mp_load_builtin_scripts(struct MPContext *mpctx);
-int mp_load_user_script(struct MPContext *mpctx, const char *fname);
+int64_t mp_load_user_script(struct MPContext *mpctx, const char *fname);
 
 // sub.c
 void reset_subtitle_state(struct MPContext *mpctx);

@@ -99,32 +99,29 @@ static const struct m_opt_choice_alternatives discard_names[] = {
     {"all",         AVDISCARD_ALL},
     {0}
 };
-#define OPT_DISCARD(name, field, flags) \
-    OPT_GENERAL(int, name, field, flags, .type = CONF_TYPE_CHOICE, \
-                .priv = (void *)discard_names)
+#define OPT_DISCARD(field) OPT_CHOICE_C(field, discard_names)
 
 const struct m_sub_options vd_lavc_conf = {
     .opts = (const m_option_t[]){
-        OPT_FLAG("vd-lavc-fast", fast, 0),
-        OPT_FLAG("vd-lavc-show-all", show_all, 0),
-        OPT_DISCARD("vd-lavc-skiploopfilter", skip_loop_filter, 0),
-        OPT_DISCARD("vd-lavc-skipidct", skip_idct, 0),
-        OPT_DISCARD("vd-lavc-skipframe", skip_frame, 0),
-        OPT_DISCARD("vd-lavc-framedrop", framedrop, 0),
-        OPT_INT("vd-lavc-threads", threads, 0, .min = 0, .max = DBL_MAX),
-        OPT_FLAG("vd-lavc-bitexact", bitexact, 0),
-        OPT_FLAG("vd-lavc-assume-old-x264", old_x264, 0),
-        OPT_FLAG("vd-lavc-check-hw-profile", check_hw_profile, 0),
-        OPT_CHOICE_OR_INT("vd-lavc-software-fallback", software_fallback,
-                          0, 1, INT_MAX, ({"no", INT_MAX}, {"yes", 1})),
-        OPT_KEYVALUELIST("vd-lavc-o", avopts, 0),
-        OPT_FLAG("vd-lavc-dr", dr, 0),
-        OPT_STRING_VALIDATE("hwdec", hwdec_api,
-                            M_OPT_OPTIONAL_PARAM | UPDATE_HWDEC,
-                            hwdec_validate_opt),
-        OPT_STRING("hwdec-codecs", hwdec_codecs, 0),
-        OPT_IMAGEFORMAT("hwdec-image-format", hwdec_image_format, 0, .min = -1),
-        OPT_INTRANGE("hwdec-extra-frames", hwdec_extra_frames, 0, 0, 256),
+        {"vd-lavc-fast", OPT_FLAG(fast)},
+        {"vd-lavc-show-all", OPT_FLAG(show_all)},
+        {"vd-lavc-skiploopfilter", OPT_DISCARD(skip_loop_filter)},
+        {"vd-lavc-skipidct", OPT_DISCARD(skip_idct)},
+        {"vd-lavc-skipframe", OPT_DISCARD(skip_frame)},
+        {"vd-lavc-framedrop", OPT_DISCARD(framedrop)},
+        {"vd-lavc-threads", OPT_INT(threads), M_RANGE(0, DBL_MAX)},
+        {"vd-lavc-bitexact", OPT_FLAG(bitexact)},
+        {"vd-lavc-assume-old-x264", OPT_FLAG(old_x264)},
+        {"vd-lavc-check-hw-profile", OPT_FLAG(check_hw_profile)},
+        {"vd-lavc-software-fallback", OPT_CHOICE(software_fallback,
+            {"no", INT_MAX}, {"yes", 1}), M_RANGE(1, INT_MAX)},
+        {"vd-lavc-o", OPT_KEYVALUELIST(avopts)},
+        {"vd-lavc-dr", OPT_FLAG(dr)},
+        {"hwdec", OPT_STRING_VALIDATE(hwdec_api, hwdec_validate_opt),
+            .flags = M_OPT_OPTIONAL_PARAM | UPDATE_HWDEC},
+        {"hwdec-codecs", OPT_STRING(hwdec_codecs)},
+        {"hwdec-image-format", OPT_IMAGEFORMAT(hwdec_image_format), .min = -1},
+        {"hwdec-extra-frames", OPT_INT(hwdec_extra_frames), M_RANGE(0, 256)},
         {0}
     },
     .size = sizeof(struct vd_lavc_params),
@@ -177,7 +174,6 @@ typedef struct lavc_ctx {
     bool flushing;
     struct lavc_state state;
     const char *decoder;
-    bool hwdec_requested;
     bool hwdec_failed;
     bool hwdec_notified;
 
@@ -470,8 +466,6 @@ static void select_and_set_hwdec(struct mp_filter *vd)
         struct hwdec_info *hwdecs = NULL;
         int num_hwdecs = 0;
         add_all_hwdec_methods(&hwdecs, &num_hwdecs);
-
-        ctx->hwdec_requested = true;
 
         for (int n = 0; n < num_hwdecs; n++) {
             struct hwdec_info *hwdec = &hwdecs[n];
@@ -1161,7 +1155,7 @@ static int receive_frame(struct mp_filter *vd, struct mp_frame *out_frame)
         }
     }
 
-    if (!ctx->hwdec_notified && ctx->hwdec_requested) {
+    if (!ctx->hwdec_notified) {
         if (ctx->use_hwdec) {
             MP_INFO(vd, "Using hardware decoding (%s).\n",
                     ctx->hwdec.method_name);

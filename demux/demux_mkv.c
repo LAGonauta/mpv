@@ -229,15 +229,15 @@ struct demux_mkv_opts {
 
 const struct m_sub_options demux_mkv_conf = {
     .opts = (const m_option_t[]) {
-        OPT_CHOICE("subtitle-preroll", subtitle_preroll, 0,
-                   ({"no", 0}, {"yes", 1}, {"index", 2})),
-        OPT_DOUBLE("subtitle-preroll-secs", subtitle_preroll_secs, 0,
-                   .min = 0, .max = DBL_MAX),
-        OPT_DOUBLE("subtitle-preroll-secs-index", subtitle_preroll_secs_index, 0,
-                   .min = 0, .max = DBL_MAX),
-        OPT_CHOICE("probe-video-duration", probe_duration, 0,
-                   ({"no", 0}, {"yes", 1}, {"full", 2})),
-        OPT_FLAG("probe-start-time", probe_start_time, 0),
+        {"subtitle-preroll", OPT_CHOICE(subtitle_preroll,
+            {"no", 0}, {"yes", 1}, {"index", 2})},
+        {"subtitle-preroll-secs", OPT_DOUBLE(subtitle_preroll_secs),
+            M_RANGE(0, DBL_MAX)},
+        {"subtitle-preroll-secs-index", OPT_DOUBLE(subtitle_preroll_secs_index),
+            M_RANGE(0, DBL_MAX)},
+        {"probe-video-duration", OPT_CHOICE(probe_duration,
+            {"no", 0}, {"yes", 1}, {"full", 2})},
+        {"probe-start-time", OPT_FLAG(probe_start_time)},
         {0}
     },
     .size = sizeof(struct demux_mkv_opts),
@@ -2995,7 +2995,8 @@ static struct mkv_index *seek_with_cues(struct demuxer *demuxer, int seek_id,
             double secs = mkv_d->opts->subtitle_preroll_secs;
             if (mkv_d->index_has_durations)
                 secs = MPMAX(secs, mkv_d->opts->subtitle_preroll_secs_index);
-            int64_t pre = MPMIN(INT64_MAX, secs * 1e9 / mkv_d->tc_scale);
+            double pre_f = secs * 1e9 / mkv_d->tc_scale;
+            int64_t pre = pre_f >= (double)INT64_MAX ? INT64_MAX : (int64_t)pre_f;
             int64_t min_tc = pre < index->timecode ? index->timecode - pre : 0;
             uint64_t prev_target = 0;
             int64_t prev_tc = 0;

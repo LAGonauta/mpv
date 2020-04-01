@@ -45,9 +45,11 @@
 #define OPT_BASE_STRUCT struct wayland_opts
 const struct m_sub_options wayland_conf = {
     .opts = (const struct m_option[]) {
-        OPT_FLAG("wayland-disable-vsync", disable_vsync, 0),
-        OPT_INTRANGE("wayland-edge-pixels-pointer", edge_pixels_pointer, 10, 0, INT_MAX),
-        OPT_INTRANGE("wayland-edge-pixels-touch", edge_pixels_touch, 64, 0, INT_MAX),
+        {"wayland-disable-vsync", OPT_FLAG(disable_vsync)},
+        {"wayland-edge-pixels-pointer", OPT_INT(edge_pixels_pointer),
+            M_RANGE(0, INT_MAX)},
+        {"wayland-edge-pixels-touch", OPT_INT(edge_pixels_touch),
+            M_RANGE(0, INT_MAX)},
         {0},
     },
     .size = sizeof(struct wayland_opts),
@@ -249,9 +251,8 @@ static void pointer_handle_axis(void *data, struct wl_pointer *wl_pointer,
                                 uint32_t time, uint32_t axis, wl_fixed_t value)
 {
     struct vo_wayland_state *wl = data;
-    if (wl_fixed_to_double(value) == 0)
-        return;
-    double val = wl_fixed_to_double(value)/abs(wl_fixed_to_double(value));
+
+    double val = wl_fixed_to_double(value) < 0 ? -1 : 1;
     switch (axis) {
     case WL_POINTER_AXIS_VERTICAL_SCROLL:
         if (value > 0)

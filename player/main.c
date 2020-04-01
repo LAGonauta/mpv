@@ -267,7 +267,7 @@ struct MPContext *mp_create(void)
         .dispatch = mp_dispatch_create(mpctx),
         .playback_abort = mp_cancel_new(mpctx),
         .thread_pool = mp_thread_pool_create(mpctx, 0, 1, 30),
-        .stop_play = PT_STOP,
+        .stop_play = PT_NEXT_ENTRY,
         .play_dir = 1,
     };
 
@@ -402,15 +402,14 @@ int mp_initialize(struct MPContext *mpctx, char **options)
         mp_input_enable_section(mpctx->input, "encode", MP_INPUT_EXCLUSIVE);
     }
 
-#if !HAVE_LIBASS
-    MP_WARN(mpctx, "Compiled without libass.\n");
-    MP_WARN(mpctx, "There will be no OSD and no text subtitles.\n");
-#endif
-
     mp_load_scripts(mpctx);
 
     if (opts->force_vo == 2 && handle_force_window(mpctx, false) < 0)
         return -1;
+
+    // Needed to properly enter _initial_ idle mode if playlist empty.
+    if (mpctx->opts->player_idle_mode && !mpctx->playlist->num_entries)
+        mpctx->stop_play = PT_STOP;
 
     MP_STATS(mpctx, "end init");
 
@@ -457,7 +456,7 @@ int mpv_main(int argc, char *argv[])
     }
 
     if (reason)
-        MP_INFO(mpctx, "\nExiting... (%s)\n", reason);
+        MP_INFO(mpctx, "Exiting... (%s)\n", reason);
     if (mpctx->has_quit_custom_rc)
         rc = mpctx->quit_custom_rc;
 
