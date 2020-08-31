@@ -199,8 +199,12 @@ static int init(struct ao *ao)
     alListenerfv(AL_ORIENTATION, direction);
 
     alGenSources(1, &source);
-    if (p->direct_channels && alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT")) {
-        alSourcei(source, alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
+    if (p->direct_channels && alIsExtensionPresent((ALchar*)"AL_SOFT_direct_channels")) {
+        ALint value = AL_TRUE; // AL_DROP_UNMATCHED_SOFT
+        if (alIsExtensionPresent("AL_SOFT_direct_channels_remix")) {
+            value = alGetEnumValue((ALchar*)"AL_REMIX_UNMATCHED_SOFT");
+        }
+        alSourcei(source, alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), value);
     }
 
     cur_buf = 0;
