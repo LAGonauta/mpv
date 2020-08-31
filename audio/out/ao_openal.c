@@ -52,6 +52,9 @@ static ALuint source;
 static int cur_buf;
 static int unqueue_buf;
 
+static bool supports_source_latency = false;
+static LPALGETSOURCEDVSOFT alGetSourcedvSOFT = NULL;
+
 static struct ao *ao_data;
 
 struct priv {
@@ -203,6 +206,12 @@ static int init(struct ao *ao)
         alSourcei(source, alGetEnumValue((ALchar*)"AL_DIRECT_CHANNELS_SOFT"), AL_TRUE);
     }
 
+    supports_source_latency = alIsExtensionPresent((ALchar*)"AL_SOFT_source_latency");
+    if (supports_source_latency) {
+        alGetSourcedvSOFT = alGetProcAddress((ALchar*)"alGetSourcedvSOFT");
+        supports_source_latency = alGetSourcedvSOFT != NULL;
+    }
+
     cur_buf = 0;
     unqueue_buf = 0;
     for (int i = 0; i < p->num_buffers; ++i) {
@@ -339,9 +348,8 @@ static void get_state(struct ao *ao, struct mp_pcm_state *state)
     alGetSourcei(source, AL_BUFFERS_QUEUED, &queued);
 
     double source_offset = 0;
-    if(alIsExtensionPresent("AL_SOFT_source_latency")) {
+    if(supports_source_latency) {
         ALdouble offsets[2];
-        LPALGETSOURCEDVSOFT alGetSourcedvSOFT = alGetProcAddress("alGetSourcedvSOFT");
         alGetSourcedvSOFT(source, AL_SEC_OFFSET_LATENCY_SOFT, offsets);
         // Additional latency to the play buffer, the remaining seconds to be
         // played minus the offset (seconds already played)
