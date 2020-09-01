@@ -12,6 +12,7 @@ static const struct unittest *unittests[] = {
     &test_paths,
     &test_repack_sws,
 #if HAVE_ZIMG
+    &test_repack, // zimg only due to cross-checking with zimg.c
     &test_repack_zimg,
 #endif
     NULL
@@ -117,14 +118,42 @@ void assert_text_files_equal_impl(const char *file, int line,
     char *path_ref = mp_tprintf(4096, "%s/%s", ctx->ref_path, ref);
     char *path_new = mp_tprintf(4096, "%s/%s", ctx->out_path, new);
 
-    char *errstr = NULL;
-    int res = mp_subprocess((char*[]){"diff", "-u", "--", path_ref, path_new, 0},
-                            NULL, NULL, NULL, NULL, &errstr);
+    struct mp_subprocess_opts opts = {
+        .exe = "diff",
+        .args = (char*[]){"diff", "-u", "--", path_ref, path_new, 0},
+        .fds = { {0, .src_fd = 0}, {1, .src_fd = 1}, {2, .src_fd = 2} },
+        .num_fds = 3,
+    };
 
-    if (res) {
-        if (res == 1)
-            MP_WARN(ctx, "Note: %s\n", err);
+    struct mp_subprocess_result res;
+    mp_subprocess2(&opts, &res);
+
+    if (res.error || res.exit_status) {
+        if (res.error)
+            MP_WARN(ctx, "Note: %s\n", mp_subprocess_err_str(res.error));
         MP_FATAL(ctx, "Giving up.\n");
         abort();
     }
+}
+
+static void hexdump(const uint8_t *d, size_t size)
+{
+    printf("|");
+    while (size--) {
+        printf(" %02x", d[0]);
+        d++;
+    }
+    printf(" |\n");
+}
+
+void assert_memcmp_impl(const char *file, int line,
+                        const void *a, const void *b, size_t size)
+{
+    if (memcmp(a, b, size) == 0)
+        return;
+
+    printf("%s:%d: mismatching data:\n", file, line);
+    hexdump(a, size);
+    hexdump(b, size);
+    abort();
 }

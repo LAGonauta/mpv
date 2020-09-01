@@ -187,10 +187,10 @@ static int best_overlap_offset_s16(struct priv *s)
         ps  += s->samples_overlap - s->num_channels;
         long i  = -(s->samples_overlap - s->num_channels);
         do {
-            corr += ppc[i + 0] * ps[i + 0];
-            corr += ppc[i + 1] * ps[i + 1];
-            corr += ppc[i + 2] * ps[i + 2];
-            corr += ppc[i + 3] * ps[i + 3];
+            corr += ppc[i + 0] * (int64_t)ps[i + 0];
+            corr += ppc[i + 1] * (int64_t)ps[i + 1];
+            corr += ppc[i + 2] * (int64_t)ps[i + 2];
+            corr += ppc[i + 3] * (int64_t)ps[i + 3];
             i += 4;
         } while (i < 0);
         if (corr > best_corr) {
@@ -538,7 +538,8 @@ static void reset(struct mp_filter *f)
     s->bytes_queued = 0;
     s->bytes_to_slide = 0;
     s->frames_stride_error = 0;
-    memset(s->buf_overlap, 0, s->bytes_overlap);
+    if (s->buf_overlap && s->bytes_overlap)
+        memset(s->buf_overlap, 0, s->bytes_overlap);
     TA_FREEP(&s->in);
 }
 

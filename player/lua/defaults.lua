@@ -547,12 +547,35 @@ end
 
 local hook_table = {}
 
+local hook_mt = {}
+hook_mt.__index = hook_mt
+
+function hook_mt.cont(t)
+    if t._id == nil then
+        mp.msg.error("hook already continued")
+    else
+        mp.raw_hook_continue(t._id)
+        t._id = nil
+    end
+end
+
+function hook_mt.defer(t)
+    t._defer = true
+end
+
 mp.register_event("hook", function(ev)
     local fn = hook_table[tonumber(ev.id)]
+    local hookobj = {
+        _id = ev.hook_id,
+        _defer = false,
+    }
+    setmetatable(hookobj, hook_mt)
     if fn then
-        fn()
+        fn(hookobj)
     end
-    mp.raw_hook_continue(ev.hook_id)
+    if (not hookobj._defer) and hookobj._id ~= nil then
+        hookobj:cont()
+    end
 end)
 
 function mp.add_hook(name, pri, cb)
@@ -640,10 +663,15 @@ function mp.set_osd_ass(res_x, res_y, data)
     if not mp._legacy_overlay then
         mp._legacy_overlay = mp.create_osd_overlay("ass-events")
     end
-    mp._legacy_overlay.res_x = res_x
-    mp._legacy_overlay.res_y = res_y
-    mp._legacy_overlay.data = data
-    mp._legacy_overlay:update()
+    if mp._legacy_overlay.res_x ~= res_x or
+       mp._legacy_overlay.res_y ~= res_y or
+       mp._legacy_overlay.data ~= data
+    then
+        mp._legacy_overlay.res_x = res_x
+        mp._legacy_overlay.res_y = res_y
+        mp._legacy_overlay.data = data
+        mp._legacy_overlay:update()
+    end
 end
 
 function mp.get_osd_size()

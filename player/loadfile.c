@@ -46,6 +46,7 @@
 #include "common/common.h"
 #include "common/encode.h"
 #include "common/recorder.h"
+#include "common/stats.h"
 #include "input/input.h"
 
 #include "audio/out/ao.h"
@@ -192,8 +193,8 @@ static void kill_demuxers_reentrant(struct MPContext *mpctx,
 
 static void uninit_demuxer(struct MPContext *mpctx)
 {
-    for (int r = 0; r < NUM_PTRACKS; r++) {
-        for (int t = 0; t < STREAM_TYPE_COUNT; t++)
+    for (int t = 0; t < STREAM_TYPE_COUNT; t++) {
+        for (int r = 0; r < num_ptracks[t]; r++)
             mpctx->current_track[r][t] = NULL;
     }
 
@@ -447,23 +448,24 @@ static int match_lang(char **langs, char *lang)
  * tid is the track ID requested by the user (-2: deselect, -1: default)
  * lang is a string list, NULL is same as empty list
  * Sort tracks based on the following criteria, and pick the first:
- * 0a) track matches ff-index (always wins)
- * 0b) track matches tid (almost always wins)
- * 0c) track is not from --external-file
+  *0a) track matches tid (always wins)
+ * 0b) track is not from --external-file
  * 1) track is external (no_default cancels this)
  * 1b) track was passed explicitly (is not an auto-loaded subtitle)
  * 2) earlier match in lang list
- * 3a) track is marked forced
- * 3b) track is marked default
+ * 3a) track is marked forced and we're preferring forced tracks
+ * 3b) track is marked non-forced and we're preferring non-forced tracks
+ * 3c) track is marked default
  * 4) attached picture, HLS bitrate
  * 5) lower track number
  * If select_fallback is not set, 5) is only used to determine whether a
  * matching track is preferred over another track. Otherwise, always pick a
  * track (if nothing else matches, return the track with lowest ID).
+ * Forced tracks are preferred when the user prefers not to display subtitles
  */
 // Return whether t1 is preferred over t2
 static bool compare_track(struct track *t1, struct track *t2, char **langs,
-                          struct MPOpts *opts)
+                          int prefer_forced, struct MPOpts *opts)
 {
     if (!opts->autoload_files && t1->is_external != t2->is_external)
         return !t1->is_external;
@@ -477,7 +479,7 @@ static bool compare_track(struct track *t1, struct track *t2, char **langs,
     if (l1 != l2)
         return l1 > l2;
     if (t1->forced_track != t2->forced_track)
-        return t1->forced_track;
+        return prefer_forced ? t1->forced_track : !t1->forced_track;
     if (t1->default_track != t2->default_track)
         return t1->default_track;
     if (t1->attached_picture != t2->attached_picture)
@@ -512,6 +514,10 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
     struct MPOpts *opts = mpctx->opts;
     int tid = opts->stream_id[order][type];
     char **langs = opts->stream_lang[type];
+    int prefer_forced = type != STREAM_SUB ||
+                        (!opts->subs_with_matching_audio &&
+                         mpctx->current_track[0][STREAM_AUDIO] &&
+                         match_lang(langs, mpctx->current_track[0][STREAM_AUDIO]->lang));
     if (tid == -2)
         return NULL;
     bool select_fallback = type == STREAM_VIDEO || type == STREAM_AUDIO;
@@ -522,11 +528,13 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
             continue;
         if (track->user_tid == tid)
             return track;
+        if (tid >= 0)
+            continue;
         if (track->no_auto_select)
             continue;
         if (duplicate_track(mpctx, order, type, track))
             continue;
-        if (!pick || compare_track(track, pick, langs, mpctx->opts))
+        if (!pick || compare_track(track, pick, langs, prefer_forced, mpctx->opts))
             pick = track;
     }
     if (pick && !select_fallback && !(pick->is_external && !pick->no_default)
@@ -537,6 +545,9 @@ struct track *select_default_track(struct MPContext *mpctx, int order,
         pick = NULL;
     if (pick && !opts->autoload_files && pick->is_external)
         pick = NULL;
+    if (pick && type == STREAM_SUB && prefer_forced && !pick->forced_track &&
+        opts->subs_rend->forced_subs_only == -1)
+        opts->subs_rend->forced_subs_only_current = 1;
     return pick;
 }
 
@@ -570,12 +581,9 @@ static void check_previous_track_selection(struct MPContext *mpctx)
         // Reset selection, but only if they're not "auto" or "off". The
         // defaults are -1 (default selection), or -2 (off) for secondary tracks.
         for (int t = 0; t < STREAM_TYPE_COUNT; t++) {
-            for (int i = 0; i < NUM_PTRACKS; i++) {
-                if (opts->stream_id[i][t] >= 0) {
-                    opts->stream_id[i][t] = i == 0 ? -1 : -2;
-                    m_config_notify_change_opt_ptr(mpctx->mconfig,
-                                                   &opts->stream_id[i][t]);
-                }
+            for (int i = 0; i < num_ptracks[t]; i++) {
+                if (opts->stream_id[i][t] >= 0)
+                    mark_track_selection(mpctx, i, t, i == 0 ? -1 : -2);
             }
         }
         talloc_free(mpctx->track_layout_hash);
@@ -584,19 +592,27 @@ static void check_previous_track_selection(struct MPContext *mpctx)
     talloc_free(h);
 }
 
+// Update the matching track selection user option to the given value.
+void mark_track_selection(struct MPContext *mpctx, int order,
+                          enum stream_type type, int value)
+{
+    assert(order >= 0 && order < num_ptracks[type]);
+    mpctx->opts->stream_id[order][type] = value;
+    m_config_notify_change_opt_ptr(mpctx->mconfig,
+                                   &mpctx->opts->stream_id[order][type]);
+}
+
 void mp_switch_track_n(struct MPContext *mpctx, int order, enum stream_type type,
                        struct track *track, int flags)
 {
     assert(!track || track->type == type);
-    assert(order >= 0 && order < NUM_PTRACKS);
+    assert(type >= 0 && type < STREAM_TYPE_COUNT);
+    assert(order >= 0 && order < num_ptracks[type]);
 
     // Mark the current track selection as explicitly user-requested. (This is
     // different from auto-selection or disabling a track due to errors.)
-    if (flags & FLAG_MARK_SELECTION) {
-        mpctx->opts->stream_id[order][type] = track ? track->user_tid : -2;
-        m_config_notify_change_opt_ptr(mpctx->mconfig,
-                                       &mpctx->opts->stream_id[order][type]);
-    }
+    if (flags & FLAG_MARK_SELECTION)
+        mark_track_selection(mpctx, order, type, track ? track->user_tid : -2);
 
     // No decoder should be initialized yet.
     if (!mpctx->demuxer)
@@ -608,19 +624,19 @@ void mp_switch_track_n(struct MPContext *mpctx, int order, enum stream_type type
 
     if (current && current->sink) {
         MP_ERR(mpctx, "Can't disable input to complex filter.\n");
-        return;
+        goto error;
     }
     if ((type == STREAM_VIDEO && mpctx->vo_chain && !mpctx->vo_chain->track) ||
         (type == STREAM_AUDIO && mpctx->ao_chain && !mpctx->ao_chain->track))
     {
         MP_ERR(mpctx, "Can't switch away from complex filter output.\n");
-        return;
+        goto error;
     }
 
     if (track && track->selected) {
         // Track has been selected in a different order parameter.
         MP_ERR(mpctx, "Track %d is already selected.\n", track->user_tid);
-        return;
+        goto error;
     }
 
     if (order == 0) {
@@ -631,7 +647,8 @@ void mp_switch_track_n(struct MPContext *mpctx, int order, enum stream_type type
         } else if (type == STREAM_AUDIO) {
             clear_audio_output_buffers(mpctx);
             uninit_audio_chain(mpctx);
-            uninit_audio_out(mpctx);
+            if (!track)
+                uninit_audio_out(mpctx);
         }
     }
     if (type == STREAM_SUB)
@@ -664,6 +681,10 @@ void mp_switch_track_n(struct MPContext *mpctx, int order, enum stream_type type
 
     talloc_free(mpctx->track_layout_hash);
     mpctx->track_layout_hash = talloc_steal(mpctx, track_layout_hash(mpctx));
+
+    return;
+error:
+    mark_track_selection(mpctx, order, type, -1);
 }
 
 void mp_switch_track(struct MPContext *mpctx, enum stream_type type,
@@ -675,8 +696,10 @@ void mp_switch_track(struct MPContext *mpctx, enum stream_type type,
 void mp_deselect_track(struct MPContext *mpctx, struct track *track)
 {
     if (track && track->selected) {
-        for (int t = 0; t < NUM_PTRACKS; t++)
+        for (int t = 0; t < num_ptracks[track->type]; t++) {
             mp_switch_track_n(mpctx, t, track->type, NULL, 0);
+            mark_track_selection(mpctx, t, track->type, -1); // default
+        }
     }
 }
 
@@ -1508,9 +1531,10 @@ static void play_current_file(struct MPContext *mpctx)
     if (reinit_complex_filters(mpctx, false) < 0)
         goto terminate_playback;
 
-    assert(NUM_PTRACKS == 2); // opts->stream_id is hardcoded to 2
+    opts->subs_rend->forced_subs_only_current = (opts->subs_rend->forced_subs_only == 1) ? 1 : 0;
+
     for (int t = 0; t < STREAM_TYPE_COUNT; t++) {
-        for (int i = 0; i < NUM_PTRACKS; i++) {
+        for (int i = 0; i < num_ptracks[t]; i++) {
             struct track *sel = NULL;
             bool taken = (t == STREAM_VIDEO && mpctx->vo_chain) ||
                          (t == STREAM_AUDIO && mpctx->ao_chain);
@@ -1520,17 +1544,24 @@ static void play_current_file(struct MPContext *mpctx)
         }
     }
     for (int t = 0; t < STREAM_TYPE_COUNT; t++) {
-        for (int i = 0; i < NUM_PTRACKS; i++) {
+        for (int i = 0; i < num_ptracks[t]; i++) {
+            // One track can strictly feed at most 1 decoder
             struct track *track = mpctx->current_track[i][t];
             if (track) {
                 if (track->selected) {
                     MP_ERR(mpctx, "Track %d can't be selected twice.\n",
                            track->user_tid);
                     mpctx->current_track[i][t] = NULL;
+                    mark_track_selection(mpctx, i, t, -2); // disable
                 } else {
                     track->selected = true;
                 }
             }
+
+            // Revert selection of unselected tracks to default. This is needed
+            // because track properties have inconsistent behavior.
+            if (!track && opts->stream_id[i][t] >= 0)
+                mark_track_selection(mpctx, i, t, -1); // default
         }
     }
 
@@ -1772,6 +1803,8 @@ struct playlist_entry *mp_next_file(struct MPContext *mpctx, int direction,
 // Return if all done.
 void mp_play_files(struct MPContext *mpctx)
 {
+    stats_register_thread_cputime(mpctx->stats, "thread");
+
     // Wait for all scripts to load before possibly starting playback.
     if (!mp_clients_all_initialized(mpctx)) {
         MP_VERBOSE(mpctx, "Waiting for scripts...\n");

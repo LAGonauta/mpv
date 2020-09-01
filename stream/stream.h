@@ -48,6 +48,9 @@
 
 #define STREAM_ORIGIN_MASK      (7 << 2) // for extracting origin value from flags
 
+#define STREAM_LOCAL_FS_ONLY    (1 << 5) // stream_file only, no URLs
+#define STREAM_LESS_NOISE       (1 << 6) // try to log errors only
+
 // end flags for stream_open_ext (the naming convention sucks)
 
 #define STREAM_UNSAFE -3
@@ -109,6 +112,7 @@ typedef struct stream_info_st {
     int (*open2)(struct stream *st, struct stream_open_args *args);
     const char *const *protocols;
     bool can_write;     // correctly checks for READ/WRITE modes
+    bool local_fs;      // supports STREAM_LOCAL_FS_ONLY
     int stream_origin;  // 0 or set of STREAM_ORIGIN_*; if 0, the same origin
                         // is set, or the stream's open() function handles it
 } stream_info_t;
@@ -168,7 +172,7 @@ typedef struct stream {
     // When reading more data from the stream, buf_start is advanced as old
     // data is overwritten with new data.
     // Example:
-    //    0  1  2  3    4  5  6  7    8  9  10 11  12  13 14 15
+    //    0  1  2  3    4  5  6  7    8  9  10 11   12 13 14 15
     //  +===========================+---------------------------+
     //  + 05 06 07 08 | 01 02 03 04 + 05 06 07 08 | 01 02 03 04 +
     //  +===========================+---------------------------+
@@ -208,6 +212,7 @@ bool stream_seek_skip(stream_t *s, int64_t pos);
 bool stream_seek(stream_t *s, int64_t pos);
 int stream_read(stream_t *s, void *mem, int total);
 int stream_read_partial(stream_t *s, void *buf, int buf_size);
+int stream_peek(stream_t *s, int forward_size);
 int stream_read_peek(stream_t *s, void *buf, int buf_size);
 void stream_drop_buffers(stream_t *s);
 int64_t stream_get_size(stream_t *s);
@@ -218,6 +223,7 @@ struct bstr stream_read_complete(struct stream *s, void *talloc_ctx,
                                  int max_size);
 struct bstr stream_read_file(const char *filename, void *talloc_ctx,
                              struct mpv_global *global, int max_size);
+
 int stream_control(stream_t *s, int cmd, void *arg);
 void free_stream(stream_t *s);
 

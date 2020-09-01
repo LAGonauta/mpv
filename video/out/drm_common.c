@@ -21,11 +21,18 @@
 #include <sys/ioctl.h>
 #include <poll.h>
 #include <sys/stat.h>
-#include <sys/vt.h>
 #include <unistd.h>
 #include <limits.h>
 #include <math.h>
 #include <time.h>
+
+#include "config.h"
+
+#if HAVE_CONSIO_H
+#include <sys/consio.h>
+#else
+#include <sys/vt.h>
+#endif
 
 #include "drm_common.h"
 
@@ -838,6 +845,9 @@ bool vt_switcher_init(struct vt_switcher *s, struct mp_log *log)
     vt_mode.mode = VT_PROCESS;
     vt_mode.relsig = RELEASE_SIGNAL;
     vt_mode.acqsig = ACQUIRE_SIGNAL;
+    // frsig is a signal for forced release. Not implemented on Linux,
+    // Solaris, BSDs but must be set to a valid signal on some of those.
+    vt_mode.frsig = SIGIO; // unused
     if (ioctl(s->tty_fd, VT_SETMODE, &vt_mode) < 0) {
         MP_ERR(s, "VT_SETMODE failed: %s\n", mp_strerror(errno));
         return false;

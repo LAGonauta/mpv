@@ -1,4 +1,7 @@
+#include <libswscale/swscale.h>
+
 #include "scale_test.h"
+#include "video/fmt-conversion.h"
 #include "video/zimg.h"
 
 static bool scale(void *pctx, struct mp_image *dst, struct mp_image *src)
@@ -21,6 +24,7 @@ static const struct scale_test_fns fns = {
 static void run(struct test_ctx *ctx)
 {
     struct mp_zimg_context *zimg = mp_zimg_alloc();
+    zimg->opts.threads = 1;
 
     struct scale_test *stest = talloc_zero(NULL, struct scale_test);
     stest->fns = &fns;
@@ -29,6 +33,22 @@ static void run(struct test_ctx *ctx)
     stest->ctx = ctx;
 
     repack_test_run(stest);
+
+    FILE *f = test_open_out(ctx, "zimg_formats.txt");
+    init_imgfmts_list();
+    for (int n = 0; n < num_imgfmts; n++) {
+        int imgfmt = imgfmts[n];
+        fprintf(f, "%15s%7s%7s%7s%8s |\n", mp_imgfmt_to_name(imgfmt),
+                mp_zimg_supports_in_format(imgfmt) ? " Zin" : "",
+                mp_zimg_supports_out_format(imgfmt) ? " Zout" : "",
+                sws_isSupportedInput(imgfmt2pixfmt(imgfmt)) ? " SWSin" : "",
+                sws_isSupportedOutput(imgfmt2pixfmt(imgfmt)) ? "  SWSout" : "");
+
+    }
+    fclose(f);
+
+    assert_text_files_equal(stest->ctx, "zimg_formats.txt", "zimg_formats.txt",
+                "This can fail if FFmpeg/libswscale adds or removes pixfmts.");
 
     talloc_free(stest);
     talloc_free(zimg);

@@ -35,7 +35,6 @@ struct vo_wayland_sync {
     int64_t ust;
     int64_t msc;
     int64_t sbc;
-    int64_t refresh_usec;
     bool filled;
 };
 
@@ -70,13 +69,13 @@ struct vo_wayland_state {
     /* State */
     struct mp_rect geometry;
     struct mp_rect window_size;
+    struct mp_rect vdparams;
     int gcd;
     int reduced_width;
     int reduced_height;
-    bool configured;
     bool frame_wait;
-    bool hidden;
-    int timeout_count;
+    bool state_change;
+    bool toplevel_configured;
     int wakeup_pipe[2];
     int pending_vo_events;
     int mouse_x;

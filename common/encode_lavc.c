@@ -77,8 +77,7 @@ struct mux_stream {
 #define OPT_BASE_STRUCT struct encode_opts
 const struct m_sub_options encode_config = {
     .opts = (const m_option_t[]) {
-        {"o", OPT_STRING(file), .flags = CONF_NOCFG | CONF_PRE_PARSE | M_OPT_FILE,
-            .deprecation_message = "lack of maintainer"},
+        {"o", OPT_STRING(file), .flags = CONF_NOCFG | CONF_PRE_PARSE | M_OPT_FILE},
         {"of", OPT_STRING(format)},
         {"ofopts", OPT_KEYVALUELIST(fopts), .flags = M_OPT_HAVE_HELP},
         {"ovc", OPT_STRING(vcodec)},
@@ -241,16 +240,6 @@ bool encode_lavc_free(struct encode_lavc_context *ctx)
     talloc_free(ctx);
 
     return res;
-}
-
-void encode_lavc_set_audio_pts(struct encode_lavc_context *ctx, double pts)
-{
-    if (ctx) {
-        pthread_mutex_lock(&ctx->lock);
-        ctx->last_audio_in_pts = pts;
-        ctx->samples_since_last_pts = 0;
-        pthread_mutex_unlock(&ctx->lock);
-    }
 }
 
 // called locked
@@ -503,10 +492,7 @@ void encode_lavc_discontinuity(struct encode_lavc_context *ctx)
         return;
 
     pthread_mutex_lock(&ctx->lock);
-
-    ctx->audio_pts_offset = MP_NOPTS_VALUE;
     ctx->discontinuity_pts_offset = MP_NOPTS_VALUE;
-
     pthread_mutex_unlock(&ctx->lock);
 }
 

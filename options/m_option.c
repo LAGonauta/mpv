@@ -1710,7 +1710,7 @@ static int parse_keyvalue_list(struct mp_log *log, const m_option_t *opt,
             val = param;
             param.len = 0;
         } else {
-            r = read_subparam(log, name, ",:", &param, &val);
+            r = read_subparam(log, name, ",", &param, &val);
             if (r < 0)
                 break;
         }
@@ -2145,7 +2145,7 @@ static bool parse_geometry_str(struct m_geometry *gm, bstr s)
     if (s.len == 0)
         return true;
     // Approximate grammar:
-    // [[W][xH]][{+-}X{+-}Y] | [X:Y]
+    // [[W][xH]][{+-}X{+-}Y][/WS] | [X:Y]
     // (meaning: [optional] {one character of} one|alternative)
     // Every number can be followed by '%'
     int num;
@@ -2180,6 +2180,14 @@ static bool parse_geometry_str(struct m_geometry *gm, bstr s)
             READ_NUM(x, x_per);
             READ_SIGN(y_sign);
             READ_NUM(y, y_per);
+        }
+        if (bstr_eatstart0(&s, "/")) {
+            bstr rest;
+            long long v = bstrtoll(s, &rest, 10);
+            if (s.len == rest.len || v < 1 || v > INT_MAX)
+                goto error;
+            s = rest;
+            gm->ws = v;
         }
     } else {
         gm->xy_valid = true;
@@ -2217,6 +2225,8 @@ static char *print_geometry(const m_option_t *opt, const void *val)
             res = talloc_asprintf_append(res, gm->y_sign ? "-" : "+");
             APPEND_PER(y, y_per);
         }
+        if (gm->ws > 0)
+            res = talloc_asprintf_append(res, "/%d", gm->ws);
     }
     return res;
 }
@@ -2301,7 +2311,8 @@ static bool geometry_equal(const m_option_t *opt, void *a, void *b)
            ga->xy_valid == gb->xy_valid && ga->wh_valid == gb->wh_valid &&
            ga->w_per == gb->w_per && ga->h_per == gb->h_per &&
            ga->x_per == gb->x_per && ga->y_per == gb->y_per &&
-           ga->x_sign == gb->x_sign && ga->y_sign == gb->y_sign;
+           ga->x_sign == gb->x_sign && ga->y_sign == gb->y_sign &&
+           ga->ws == gb->ws;
 }
 
 const m_option_type_t m_option_type_geometry = {
@@ -2356,8 +2367,6 @@ const m_option_type_t m_option_type_size_box = {
 static int parse_imgfmt(struct mp_log *log, const m_option_t *opt,
                         struct bstr name, struct bstr param, void *dst)
 {
-    bool accept_no = opt->min < 0;
-
     if (param.len == 0)
         return M_OPT_MISSING_PARAM;
 
@@ -2366,15 +2375,14 @@ static int parse_imgfmt(struct mp_log *log, const m_option_t *opt,
         char **list = mp_imgfmt_name_list();
         for (int i = 0; list[i]; i++)
             mp_info(log, " %s", list[i]);
-        if (accept_no)
-            mp_info(log, " no");
+        mp_info(log, " no");
         mp_info(log, "\n");
         talloc_free(list);
         return M_OPT_EXIT;
     }
 
     unsigned int fmt = mp_imgfmt_from_name(param);
-    if (!fmt && !(accept_no && bstr_equals0(param, "no"))) {
+    if (!fmt && !bstr_equals0(param, "no")) {
         mp_err(log, "Option %.*s: unknown format name: '%.*s'\n",
                BSTR_P(name), BSTR_P(param));
         return M_OPT_INVALID;
@@ -2496,8 +2504,7 @@ const m_option_type_t m_option_type_afmt = {
 static int parse_channels(struct mp_log *log, const m_option_t *opt,
                           struct bstr name, struct bstr param, void *dst)
 {
-    // see OPT_CHANNELS for semantics.
-    bool limited = opt->min;
+    bool limited = opt->flags & M_OPT_CHANNELS_LIMITED;
 
     struct m_channels res = {0};
 
@@ -2639,7 +2646,7 @@ static int parse_timestring(struct bstr str, double *time, char endchar)
     return len;
 }
 
-#define HAS_NOPTS(opt) ((opt)->min == MP_NOPTS_VALUE)
+#define HAS_NOPTS(opt) ((opt)->flags & M_OPT_ALLOW_NO)
 
 static int parse_time(struct mp_log *log, const m_option_t *opt,
                       struct bstr name, struct bstr param, void *dst)

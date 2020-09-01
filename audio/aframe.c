@@ -100,6 +100,19 @@ void mp_aframe_unref_data(struct mp_aframe *frame)
     talloc_free(tmp);
 }
 
+// Allocate this much data. Returns false for failure (data already allocated,
+// invalid sample count or format, allocation failures).
+// Normally you're supposed to use a frame pool and mp_aframe_pool_allocate().
+bool mp_aframe_alloc_data(struct mp_aframe *frame, int samples)
+{
+    if (mp_aframe_is_allocated(frame))
+        return false;
+    struct mp_aframe_pool *p = mp_aframe_pool_create(NULL);
+    int r = mp_aframe_pool_allocate(p, frame, samples);
+    talloc_free(p);
+    return r >= 0;
+}
+
 // Return a new reference to the data in av_frame. av_frame itself is not
 // touched. Returns NULL if not representable, or if input is NULL.
 // Does not copy the timestamps.
@@ -448,13 +461,13 @@ void mp_aframe_clip_timestamps(struct mp_aframe *f, double start, double end)
     double rate = mp_aframe_get_effective_rate(f);
     if (f_end == MP_NOPTS_VALUE)
         return;
-    if (af_fmt_is_spdif(mp_aframe_get_format(f)))
-        return;
     if (end != MP_NOPTS_VALUE) {
         if (f_end >= end) {
             if (f->pts >= end) {
                 f->av_frame->nb_samples = 0;
             } else {
+                if (af_fmt_is_spdif(mp_aframe_get_format(f)))
+                    return;
                 int new = (end - f->pts) * rate;
                 f->av_frame->nb_samples = MPCLAMP(new, 0, f->av_frame->nb_samples);
             }
@@ -466,6 +479,8 @@ void mp_aframe_clip_timestamps(struct mp_aframe *f, double start, double end)
                 f->av_frame->nb_samples = 0;
                 f->pts = f_end;
             } else {
+                if (af_fmt_is_spdif(mp_aframe_get_format(f)))
+                    return;
                 int skip = (start - f->pts) * rate;
                 skip = MPCLAMP(skip, 0, f->av_frame->nb_samples);
                 mp_aframe_skip_samples(f, skip);

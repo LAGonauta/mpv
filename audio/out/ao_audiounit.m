@@ -21,7 +21,6 @@
 #include "audio/format.h"
 #include "osdep/timer.h"
 #include "options/m_option.h"
-#include "misc/ring.h"
 #include "common/msg.h"
 #include "ao_coreaudio_utils.h"
 #include "ao_coreaudio_chmap.h"
@@ -193,6 +192,6 @@ const struct ao_driver audio_out_audiounit = {
     .uninit         = uninit,
     .init           = init,
     .reset          = stop,
-    .resume         = start,
+    .start          = start,
     .priv_size      = sizeof(struct priv),
 };

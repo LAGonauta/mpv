@@ -124,6 +124,7 @@ static const m_option_t mp_vo_opt_list[] = {
     {"window-maximized", OPT_FLAG(window_maximized)},
     {"force-window-position", OPT_FLAG(force_window_position)},
     {"x11-name", OPT_STRING(winname)},
+    {"wayland-app-id", OPT_STRING(appid)},
     {"monitoraspect", OPT_FLOAT(force_monitor_aspect), M_RANGE(0.0, 9.0)},
     {"monitorpixelaspect", OPT_FLOAT(monitor_pixel_aspect),
         M_RANGE(1.0/32.0, 32.0)},
@@ -136,6 +137,8 @@ static const m_option_t mp_vo_opt_list[] = {
     {"video-pan-y", OPT_FLOAT(pan_y), M_RANGE(-3.0, 3.0)},
     {"video-align-x", OPT_FLOAT(align_x), M_RANGE(-1.0, 1.0)},
     {"video-align-y", OPT_FLOAT(align_y), M_RANGE(-1.0, 1.0)},
+    {"video-scale-x", OPT_FLOAT(scale_x), M_RANGE(0, 10000.0)},
+    {"video-scale-y", OPT_FLOAT(scale_y), M_RANGE(0, 10000.0)},
     {"video-margin-ratio-left", OPT_FLOAT(margin_x[0]), M_RANGE(0.0, 1.0)},
     {"video-margin-ratio-right", OPT_FLOAT(margin_x[1]), M_RANGE(0.0, 1.0)},
     {"video-margin-ratio-top", OPT_FLOAT(margin_y[0]), M_RANGE(0.0, 1.0)},
@@ -177,6 +180,8 @@ const struct m_sub_options vo_sub_opts = {
         .screen_id = -1,
         .fsscreen_id = -1,
         .panscan = 0.0f,
+        .scale_x = 1.0f,
+        .scale_y = 1.0f,
         .keepaspect = 1,
         .keepaspect_window = 1,
         .hidpi_window_scale = 1,
@@ -223,15 +228,16 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         {"sub-fps", OPT_FLOAT(sub_fps)},
         {"sub-speed", OPT_FLOAT(sub_speed)},
         {"sub-visibility", OPT_FLAG(sub_visibility)},
-        {"sub-forced-only", OPT_FLAG(forced_subs_only)},
+        {"sub-forced-only", OPT_CHOICE(forced_subs_only,
+            {"auto", -1}, {"no", 0}, {"yes", 1})},
         {"stretch-dvd-subs", OPT_FLAG(stretch_dvd_subs)},
         {"stretch-image-subs-to-screen", OPT_FLAG(stretch_image_subs)},
         {"image-subs-video-resolution", OPT_FLAG(image_subs_video_res)},
         {"sub-fix-timing", OPT_FLAG(sub_fix_timing)},
-        {"sub-pos", OPT_INT(sub_pos), M_RANGE(0, 100)},
+        {"sub-pos", OPT_INT(sub_pos), M_RANGE(0, 150)},
         {"sub-gauss", OPT_FLOAT(sub_gauss), M_RANGE(0.0, 3.0)},
         {"sub-gray", OPT_FLAG(sub_gray)},
-        {"sub-ass", OPT_FLAG(ass_enabled)},
+        {"sub-ass", OPT_FLAG(ass_enabled), .flags = UPDATE_SUB_HARD},
         {"sub-scale", OPT_FLOAT(sub_scale), M_RANGE(0, 100)},
         {"sub-ass-line-spacing", OPT_FLOAT(ass_line_spacing),
             M_RANGE(-1000, 1000)},
@@ -241,9 +247,11 @@ const struct m_sub_options mp_subtitle_sub_opts = {
         {"sub-ass-vsfilter-color-compat", OPT_CHOICE(ass_vsfilter_color_compat,
             {"no", 0}, {"basic", 1}, {"full", 2}, {"force-601", 3})},
         {"sub-ass-vsfilter-blur-compat", OPT_FLAG(ass_vsfilter_blur_compat)},
-        {"embeddedfonts", OPT_FLAG(use_embedded_fonts)},
-        {"sub-ass-force-style", OPT_STRINGLIST(ass_force_style_list)},
-        {"sub-ass-styles", OPT_STRING(ass_styles_file), .flags = M_OPT_FILE},
+        {"embeddedfonts", OPT_FLAG(use_embedded_fonts), .flags = UPDATE_SUB_HARD},
+        {"sub-ass-force-style", OPT_STRINGLIST(ass_force_style_list),
+            .flags = UPDATE_SUB_HARD},
+        {"sub-ass-styles", OPT_STRING(ass_styles_file), .flags = M_OPT_FILE,
+            .flags = UPDATE_SUB_HARD},
         {"sub-ass-hinting", OPT_CHOICE(ass_hinting,
             {"none", 0}, {"light", 1}, {"normal", 2}, {"native", 3})},
         {"sub-ass-shaper", OPT_CHOICE(ass_shaper,
@@ -262,6 +270,7 @@ const struct m_sub_options mp_subtitle_sub_opts = {
     .size = sizeof(OPT_BASE_STRUCT),
     .defaults = &(OPT_BASE_STRUCT){
         .sub_visibility = 1,
+        .forced_subs_only = -1,
         .sub_pos = 100,
         .sub_speed = 1.0,
         .ass_enabled = 1,
@@ -422,6 +431,9 @@ static const m_option_t mp_opts[] = {
         .flags = UPDATE_BUILTIN_SCRIPTS},
     {"load-osd-console", OPT_FLAG(lua_load_console),
         .flags = UPDATE_BUILTIN_SCRIPTS},
+    {"load-auto-profiles",
+        OPT_CHOICE(lua_load_auto_profiles, {"no", 0}, {"yes", 1}, {"auto", -1}),
+        .flags = UPDATE_BUILTIN_SCRIPTS},
 #endif
 
 // ------------------------- stream options --------------------
@@ -447,8 +459,8 @@ static const m_option_t mp_opts[] = {
 
     {"rebase-start-time", OPT_FLAG(rebase_start_time)},
 
-    {"ab-loop-a", OPT_TIME(ab_loop[0]), .min = MP_NOPTS_VALUE},
-    {"ab-loop-b", OPT_TIME(ab_loop[1]), .min = MP_NOPTS_VALUE},
+    {"ab-loop-a", OPT_TIME(ab_loop[0]), .flags = M_OPT_ALLOW_NO},
+    {"ab-loop-b", OPT_TIME(ab_loop[1]), .flags = M_OPT_ALLOW_NO},
     {"ab-loop-count", OPT_CHOICE(ab_loop_count, {"inf", -1}),
         M_RANGE(0, INT_MAX)},
 
@@ -467,6 +479,7 @@ static const m_option_t mp_opts[] = {
      {"index", OPT_CHOICE(index_mode, {"default", 1}, {"recreate", 0})},
 
     // select audio/video/subtitle stream
+    // keep in sync with num_ptracks[] and MAX_PTRACKS
     {"aid", OPT_TRACKCHOICE(stream_id[0][STREAM_AUDIO])},
     {"vid", OPT_TRACKCHOICE(stream_id[0][STREAM_VIDEO])},
     {"sid", OPT_TRACKCHOICE(stream_id[0][STREAM_SUB])},
@@ -478,6 +491,7 @@ static const m_option_t mp_opts[] = {
     {"slang", OPT_STRINGLIST(stream_lang[STREAM_SUB])},
     {"vlang", OPT_STRINGLIST(stream_lang[STREAM_VIDEO])},
     {"track-auto-selection", OPT_FLAG(stream_auto_sel)},
+    {"subs-with-matching-audio", OPT_FLAG(subs_with_matching_audio)},
 
     {"lavfi-complex", OPT_STRING(lavfi_complex), .flags = UPDATE_LAVFI_COMPLEX},
 
@@ -647,8 +661,8 @@ static const m_option_t mp_opts[] = {
         M_RANGE(1, 10000)},
     {"loop-file", OPT_CHOICE(loop_file,
         {"no", 0},
-        {"yes", -1},
-        {"inf", -1}),
+        {"inf", -1},
+        {"yes", -1}),
         M_RANGE(0, 10000)},
     {"loop", OPT_ALIAS("loop-file")},
 
@@ -689,8 +703,7 @@ static const m_option_t mp_opts[] = {
         M_RANGE(0, DBL_MAX)},
     {"video-sync-max-audio-change", OPT_DOUBLE(sync_max_audio_change),
         M_RANGE(0, 1)},
-    {"video-sync-adrop-size", OPT_DOUBLE(sync_audio_drop_size),
-        M_RANGE(0, 1)},
+    {"video-sync-max-factor", OPT_INT(sync_max_factor), M_RANGE(1, 10)},
     {"hr-seek", OPT_CHOICE(hr_seek,
         {"no", -1}, {"absolute", 0}, {"yes", 1}, {"always", 1}, {"default", 2})},
     {"hr-seek-demuxer-offset", OPT_FLOAT(hr_seek_demuxer_offset)},
@@ -698,20 +711,21 @@ static const m_option_t mp_opts[] = {
     {"autosync", OPT_CHOICE(autosync, {"no", -1}), M_RANGE(0, 10000)},
 
     {"term-osd", OPT_CHOICE(term_osd,
-        {"force", 1}, {"auto", 2}, {"no", 0})},
+        {"force", 1}, {"auto", 2}, {"no", 0}), .flags = UPDATE_OSD},
 
-    {"term-osd-bar", OPT_FLAG(term_osd_bar)},
-    {"term-osd-bar-chars", OPT_STRING(term_osd_bar_chars)},
+    {"term-osd-bar", OPT_FLAG(term_osd_bar), .flags = UPDATE_OSD},
+    {"term-osd-bar-chars", OPT_STRING(term_osd_bar_chars), .flags = UPDATE_OSD},
+    {"term-title", OPT_STRING(term_title), .flags = UPDATE_OSD},
 
     {"term-playing-msg", OPT_STRING(playing_msg)},
     {"osd-playing-msg", OPT_STRING(osd_playing_msg)},
-    {"term-status-msg", OPT_STRING(status_msg)},
-    {"osd-status-msg", OPT_STRING(osd_status_msg)},
-    {"osd-msg1", OPT_STRING(osd_msg[0])},
-    {"osd-msg2", OPT_STRING(osd_msg[1])},
-    {"osd-msg3", OPT_STRING(osd_msg[2])},
+    {"term-status-msg", OPT_STRING(status_msg), .flags = UPDATE_OSD},
+    {"osd-status-msg", OPT_STRING(osd_status_msg), .flags = UPDATE_OSD},
+    {"osd-msg1", OPT_STRING(osd_msg[0]), .flags = UPDATE_OSD},
+    {"osd-msg2", OPT_STRING(osd_msg[1]), .flags = UPDATE_OSD},
+    {"osd-msg3", OPT_STRING(osd_msg[2]), .flags = UPDATE_OSD},
 
-    {"video-osd", OPT_FLAG(video_osd)},
+    {"video-osd", OPT_FLAG(video_osd), .flags = UPDATE_OSD},
 
     {"idle", OPT_CHOICE(player_idle_mode,
         {"no",   0}, {"once", 1}, {"yes",  2})},
@@ -719,6 +733,9 @@ static const m_option_t mp_opts[] = {
     {"input-terminal", OPT_FLAG(consolecontrols), .flags = UPDATE_TERM},
 
     {"input-ipc-server", OPT_STRING(ipc_path), .flags = M_OPT_FILE},
+#if HAVE_POSIX
+    {"input-ipc-client", OPT_STRING(ipc_client)},
+#endif
 
     {"screenshot", OPT_SUBSTRUCT(screenshot_image_opts, screenshot_conf)},
     {"screenshot-template", OPT_STRING(screenshot_template)},
@@ -936,6 +953,7 @@ static const struct MPOpts mp_default_opts = {
     .lua_ytdl_raw_options = NULL,
     .lua_load_stats = 1,
     .lua_load_console = 1,
+    .lua_load_auto_profiles = -1,
 #endif
     .auto_load_scripts = 1,
     .loop_times = 1,
@@ -946,7 +964,7 @@ static const struct MPOpts mp_default_opts = {
     .hr_seek_framedrop = 1,
     .sync_max_video_change = 1,
     .sync_max_audio_change = 0.125,
-    .sync_audio_drop_size = 0.020,
+    .sync_max_factor = 5,
     .load_config = 1,
     .position_resume = 1,
     .autoload_files = 1,
@@ -977,6 +995,7 @@ static const struct MPOpts mp_default_opts = {
                      [STREAM_VIDEO] = -2,
                      [STREAM_SUB] = -2, }, },
     .stream_auto_sel = 1,
+    .subs_with_matching_audio = 1,
     .audio_display = 1,
     .audio_output_format = 0,  // AF_FORMAT_UNKNOWN
     .playback_speed = 1.,

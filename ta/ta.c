@@ -25,8 +25,12 @@
 //       make sense to set this value higher than malloc's alignment.
 #define MIN_ALIGN 16
 
-#ifndef NDEBUG
-#define TA_MEMORY_DEBUGGING
+#if !defined(TA_MEMORY_DEBUGGING)
+    #if !defined(NDEBUG)
+        #define TA_MEMORY_DEBUGGING 1
+    #else
+        #define TA_MEMORY_DEBUGGING 0
+    #endif
 #endif
 
 struct ta_header {
@@ -38,7 +42,7 @@ struct ta_header {
     struct ta_header *child;    // points to first child
     struct ta_header *parent;   // set for _first_ child only, NULL otherwise
     void (*destructor)(void *);
-#ifdef TA_MEMORY_DEBUGGING
+#if TA_MEMORY_DEBUGGING
     unsigned int canary;
     struct ta_header *leak_next;
     struct ta_header *leak_prev;
@@ -93,7 +97,7 @@ void ta_set_parent(void *ptr, void *ta_parent)
         ch->prev->next = ch->next;
     if (ch->next)
         ch->next->prev = ch->prev;
-    // If ch was the firs child, change child link of old parent
+    // If ch was the first child, change child link of old parent
     if (ch->parent) {
         assert(ch->parent->child == ch);
         ch->parent->child = ch->next;
@@ -113,6 +117,16 @@ void ta_set_parent(void *ptr, void *ta_parent)
         new_parent->child = ch;
         ch->parent = new_parent;
     }
+}
+
+/* Return the parent allocation, or NULL if none or if ptr==NULL.
+ *
+ * Warning: do not use this for program logic, or I'll be sad.
+ */
+void *ta_get_parent(void *ptr)
+{
+    struct ta_header *ch = get_header(ptr);
+    return ch ? ch->parent : NULL;
 }
 
 /* Allocate size bytes of memory. If ta_parent is not NULL, this is used as
@@ -251,7 +265,7 @@ void ta_set_destructor(void *ptr, void (*destructor)(void *))
         h->destructor = destructor;
 }
 
-#ifdef TA_MEMORY_DEBUGGING
+#if TA_MEMORY_DEBUGGING
 
 #include <pthread.h>
 

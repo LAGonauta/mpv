@@ -52,6 +52,7 @@ void ta_free(void *ptr);
 void ta_free_children(void *ptr);
 void ta_set_destructor(void *ptr, void (*destructor)(void *));
 void ta_set_parent(void *ptr, void *ta_parent);
+void *ta_get_parent(void *ptr);
 
 // Utility functions
 size_t ta_calc_array_size(size_t element_size, size_t count);
@@ -125,14 +126,12 @@ bool ta_vasprintf_append_buffer(char **str, const char *fmt, va_list ap) TA_PRF(
 #define ta_xnew_array_ptrtype(...)      ta_oom_g(ta_new_array_ptrtype(__VA_ARGS__))
 #define ta_xdup(...)                    ta_oom_g(ta_dup(__VA_ARGS__))
 
-#define ta_xsteal(ta_parent, ptr) (TA_TYPEOF(ptr))ta_xsteal_(ta_parent, ptr)
 #define ta_xrealloc(ta_parent, ptr, type, count) \
     (type *)ta_xrealloc_size(ta_parent, ptr, ta_calc_array_size(sizeof(type), count))
 
 // Can't be macros, because the OOM logic is slightly less trivial.
 char *ta_xstrdup(void *ta_parent, const char *str);
 char *ta_xstrndup(void *ta_parent, const char *str, size_t n);
-void *ta_xsteal_(void *ta_parent, void *ptr);
 void *ta_xmemdup(void *ta_parent, void *ptr, size_t size);
 void *ta_xrealloc_size(void *ta_parent, void *ptr, size_t size);
 

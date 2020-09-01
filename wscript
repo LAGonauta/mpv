@@ -224,11 +224,6 @@ main_dependencies = [
         'req': True,
         'fmsg': 'C11 atomics are required; you may need a newer compiler',
     }, {
-        # C11; technically we require C11, but aligned_alloc() is not in MinGW
-        'name': 'aligned_alloc',
-        'desc': 'C11 aligned_alloc()',
-        'func': check_statement('stdlib.h', 'aligned_alloc(1, 1)'),
-    }, {
         'name': 'librt',
         'desc': 'linking with -lrt',
         'deps': 'pthreads',
@@ -246,22 +241,6 @@ iconv support use --disable-iconv.",
         'desc': 'w32/dos paths',
         'deps': 'os-win32 || os-cygwin',
         'func': check_true
-    }, {
-        'name': 'posix-spawn-native',
-        'desc': 'spawnp()/kill() POSIX support',
-        'func': check_statement(['spawn.h', 'signal.h'],
-            'posix_spawnp(0,0,0,0,0,0); kill(0,0)'),
-        'deps': '!mingw && !tvos',
-    }, {
-        'name': 'posix-spawn-android',
-        'desc': 'spawnp()/kill() Android replacement',
-        'func': check_true,
-        'deps': 'android && !posix-spawn-native',
-    },{
-        'name': 'posix-spawn',
-        'desc': 'any spawnp()/kill() support',
-        'deps': 'posix-spawn-native || posix-spawn-android',
-        'func': check_true,
     }, {
         'name': 'glob-posix',
         'desc': 'glob() POSIX support',
@@ -283,6 +262,12 @@ iconv support use --disable-iconv.",
         'func': check_statement(['sys/vt.h', 'sys/ioctl.h'],
                                 'int m; ioctl(0, VT_GETMODE, &m)'),
     }, {
+        'name': 'consio.h',
+        'desc': 'consio.h',
+        'deps': '!vt.h',
+        'func': check_statement(['sys/consio.h', 'sys/ioctl.h'],
+                                'int m; ioctl(0, VT_GETMODE, &m)'),
+    }, {
         'name': 'gbm.h',
         'desc': 'gbm.h',
         'func': check_cc(header_name=['stdio.h', 'gbm.h']),
@@ -302,7 +287,7 @@ iconv support use --disable-iconv.",
         'name': 'bsd-thread-name',
         'desc': 'BSD API for setting thread name',
         'deps': '!(glibc-thread-name || osx-thread-name)',
-        'func': check_statement('pthread.h',
+        'func': check_statement(['pthread.h', 'pthread_np.h'],
                                 'pthread_set_name_np(pthread_self(), "ducks")',
                                 use=['pthreads']),
     }, {
@@ -317,12 +302,6 @@ iconv support use --disable-iconv.",
         'func': check_statement('sys/vfs.h',
                                 'struct statfs fs; fstatfs(0, &fs); fs.f_namelen')
     }, {
-        'name': 'memfd_create',
-        'desc': "Linux's memfd_create()",
-        'deps': 'os-linux',
-        'func': check_statement('sys/mman.h',
-                                'memfd_create("mpv", MFD_CLOEXEC | MFD_ALLOW_SEALING)')
-    }, {
         'name' : '--lua',
         'desc' : 'Lua',
         'func': check_lua,
@@ -333,7 +312,7 @@ iconv support use --disable-iconv.",
     }, {
         'name': 'libass',
         'desc': 'SSA/ASS support',
-        'func': check_pkg_config('libass', '>= 0.12.1'),
+        'func': check_pkg_config('libass', '>= 0.12.2'),
         'req': True,
         'fmsg': "Unable to find development files for libass, or the version " +
                 "found is too old. Aborting."
@@ -373,7 +352,6 @@ iconv support use --disable-iconv.",
         'func': check_pkg_config('rubberband', '>= 1.8.0'),
     }, {
         'name': '--zimg',
-        'deps': 'aligned_alloc',
         'desc': 'libzimg support (high quality software scaler)',
         'func': check_pkg_config('zimg', '>= 2.9'),
     }, {
@@ -495,7 +473,7 @@ video_output_features = [
     }, {
         'name': '--drm',
         'desc': 'DRM',
-        'deps': 'vt.h',
+        'deps': 'vt.h || consio.h',
         'func': check_pkg_config('libdrm', '>= 2.4.74'),
     }, {
         'name': '--gbm',
@@ -517,6 +495,12 @@ video_output_features = [
         'func': check_pkg_config('wayland-client', '>= 1.15.0',
                                  'wayland-cursor', '>= 1.15.0',
                                  'xkbcommon',      '>= 0.3.0'),
+    } , {
+        'name': 'memfd_create',
+        'desc': "Linux's memfd_create()",
+        'deps': 'wayland',
+        'func': check_statement('sys/mman.h',
+                                'memfd_create("mpv", MFD_CLOEXEC | MFD_ALLOW_SEALING)')
     } , {
         'name': '--x11',
         'desc': 'X11',
@@ -548,14 +532,19 @@ video_output_features = [
         'func': check_libs(['GL', 'GL Xdamage'],
                    check_cc(fragment=load_fragment('gl_x11.c'),
                             use=['x11', 'libdl', 'pthreads']))
+    }, {
+        'name': '--rpi',
+        'desc': 'Raspberry Pi support',
+        'func': check_egl_provider(name='brcmegl', check=any_check(
+            check_pkg_config('brcmegl'),
+            check_pkg_config('/opt/vc/lib/pkgconfig/brcmegl.pc')
+            )),
+        'default': 'disable',
     } , {
         'name': '--egl',
         'desc': 'EGL 1.4',
         'groups': [ 'gl' ],
-        'func': compose_checks(
-            check_pkg_config('egl'),
-            check_statement(['EGL/egl.h'], 'int x[EGL_VERSION_1_4]')
-            ),
+        'func': check_egl_provider('1.4')
     } , {
         'name': '--egl-x11',
         'desc': 'OpenGL X11 EGL Backend',
@@ -565,16 +554,15 @@ video_output_features = [
     } , {
         'name': '--egl-drm',
         'desc': 'OpenGL DRM EGL Backend',
-        'deps': 'drm && gbm',
+        'deps': 'drm && gbm && egl',
         'groups': [ 'gl' ],
-        'func': check_pkg_config('egl'),
+        'func': check_true,
     } , {
         'name': '--gl-wayland',
         'desc': 'OpenGL Wayland Backend',
-        'deps': 'wayland',
+        'deps': 'wayland && egl',
         'groups': [ 'gl' ],
-        'func': check_pkg_config('wayland-egl', '>= 9.0.0',
-                                 'egl',         '>= 1.5')
+        'func': check_pkg_config('wayland-egl', '>= 9.0.0')
     } , {
         'name': '--gl-win32',
         'desc': 'OpenGL Win32 Backend',
@@ -709,11 +697,6 @@ video_output_features = [
         'desc': 'Direct3D 11 video output',
         'deps': 'win32-desktop && shaderc && spirv-cross',
         'func': check_cc(header_name=['d3d11_1.h', 'dxgi1_6.h']),
-    }, {
-        'name': '--rpi',
-        'desc': 'Raspberry Pi support',
-        'func': check_pkg_config('brcmegl'),
-        'default': 'disable',
     } , {
         'name': '--ios-gl',
         'desc': 'iOS OpenGL ES hardware decoding interop support',
@@ -751,8 +734,7 @@ video_output_features = [
     }, {
         'name': 'egl-helpers',
         'desc': 'EGL helper functions',
-        'deps': 'egl-x11 || rpi || gl-wayland || egl-drm || ' +
-                'egl-angle-win32 || egl-android',
+        'deps': 'egl || rpi || egl-angle-win32 || egl-android',
         'func': check_true
     }
 ]
@@ -802,7 +784,8 @@ hwaccel_features = [
         'name': '--rpi-mmal',
         'desc': 'Raspberry Pi MMAL hwaccel',
         'deps': 'rpi',
-        'func': check_pkg_config('mmal'),
+        'func': any_check(check_pkg_config('mmal'),
+                          check_pkg_config('/opt/vc/lib/pkgconfig/mmal.pc')),
     }
 ]
 
@@ -1005,7 +988,7 @@ def __write_version__(ctx):
 
     ctx(
         source = 'version.sh',
-        target = 'version.h',
+        target = 'generated/version.h',
         rule   = 'sh ${SRC} ${CWD_ST:VERSIONSH_CWD} ${VERSIONH_ST:TGT}',
         always = True,
         update_outputs = True)

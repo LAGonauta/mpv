@@ -15,47 +15,48 @@
  * License along with mpv.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-#include <stddef.h>
-#include <stdbool.h>
+#include <assert.h>
 #include <inttypes.h>
 #include <math.h>
-#include <assert.h>
+#include <stdbool.h>
+#include <stddef.h>
 
+#include "client.h"
+#include "command.h"
 #include "config.h"
+#include "core.h"
 #include "mpv_talloc.h"
-
-#include "common/msg.h"
-#include "options/options.h"
-#include "common/common.h"
-#include "common/encode.h"
-#include "common/recorder.h"
-#include "filters/f_decoder_wrapper.h"
-#include "options/m_config_frontend.h"
-#include "options/m_property.h"
-#include "common/playlist.h"
-#include "input/input.h"
-
-#include "misc/dispatch.h"
-#include "osdep/terminal.h"
-#include "osdep/timer.h"
+#include "screenshot.h"
 
 #include "audio/out/ao.h"
+#include "common/common.h"
+#include "common/encode.h"
+#include "common/msg.h"
+#include "common/playlist.h"
+#include "common/recorder.h"
+#include "common/stats.h"
 #include "demux/demux.h"
+#include "filters/f_decoder_wrapper.h"
+#include "filters/filter_internal.h"
+#include "input/input.h"
+#include "misc/dispatch.h"
+#include "options/m_config_frontend.h"
+#include "options/m_property.h"
+#include "options/options.h"
+#include "osdep/terminal.h"
+#include "osdep/timer.h"
 #include "stream/stream.h"
 #include "sub/dec_sub.h"
 #include "sub/osd.h"
 #include "video/out/vo.h"
-
-#include "core.h"
-#include "client.h"
-#include "command.h"
-#include "screenshot.h"
 
 // Wait until mp_wakeup_core() is called, since the last time
 // mp_wait_events() was called.
 void mp_wait_events(struct MPContext *mpctx)
 {
     mp_client_send_property_changes(mpctx);
+
+    stats_event(mpctx->stats, "iterations");
 
     bool sleeping = mpctx->sleeptime > 0;
     if (sleeping)
@@ -107,7 +108,7 @@ void mp_core_unlock(struct MPContext *mpctx)
 }
 
 // Process any queued user input.
-void mp_process_input(struct MPContext *mpctx)
+static void mp_process_input(struct MPContext *mpctx)
 {
     for (;;) {
         mp_cmd_t *cmd = mp_input_read_cmd(mpctx->input);
@@ -142,6 +143,11 @@ void update_core_idle_state(struct MPContext *mpctx)
     }
 }
 
+bool get_internal_paused(struct MPContext *mpctx)
+{
+    return mpctx->opts->pause || mpctx->paused_for_cache;
+}
+
 // The value passed here is the new value for mpctx->opts->pause
 void set_pause_state(struct MPContext *mpctx, bool user_pause)
 {
@@ -149,17 +155,12 @@ void set_pause_state(struct MPContext *mpctx, bool user_pause)
 
     opts->pause = user_pause;
 
-    bool internal_paused = opts->pause || mpctx->paused_for_cache;
+    bool internal_paused = get_internal_paused(mpctx);
     if (internal_paused != mpctx->paused) {
         mpctx->paused = internal_paused;
 
-        if (mpctx->ao && mpctx->ao_chain) {
-            if (internal_paused) {
-                ao_pause(mpctx->ao);
-            } else {
-                ao_resume(mpctx->ao);
-            }
-        }
+        if (mpctx->ao && mpctx->ao_chain)
+            ao_set_paused(mpctx->ao, internal_paused);
 
         if (mpctx->video_out)
             vo_set_paused(mpctx->video_out, internal_paused);
@@ -570,7 +571,7 @@ double get_current_pos_ratio(struct MPContext *mpctx, bool use_range)
 int get_percent_pos(struct MPContext *mpctx)
 {
     double pos = get_current_pos_ratio(mpctx, false);
-    return pos < 0 ? -1 : pos * 100;
+    return pos < 0 ? -1 : (int)round(pos * 100);
 }
 
 // -2 is no chapters, -1 is before first chapter
@@ -891,6 +892,11 @@ static void handle_loop_file(struct MPContext *mpctx)
     }
 
     if (target != MP_NOPTS_VALUE) {
+        if (!mpctx->shown_aframes && !mpctx->shown_vframes) {
+            MP_WARN(mpctx, "No media data to loop.\n");
+            return;
+        }
+
         mpctx->stop_play = KEEP_PLAYING;
         set_osd_function(mpctx, OSD_FFW);
         mark_seek(mpctx);
@@ -943,8 +949,8 @@ static void handle_keep_open(struct MPContext *mpctx)
                 seek_to_last_frame(mpctx);
         }
         if (opts->keep_open_pause) {
-            if (mpctx->ao)
-                ao_drain(mpctx->ao);
+            if (mpctx->ao && ao_is_playing(mpctx->ao))
+                return;
             set_pause_state(mpctx, true);
         }
     }
@@ -1109,10 +1115,7 @@ static void handle_playback_restart(struct MPContext *mpctx)
             return;
         }
 
-        MP_DBG(mpctx, "starting audio playback\n");
-        mpctx->audio_status = STATUS_PLAYING;
-        fill_audio_out_buffers(mpctx); // actually play prepared buffer
-        mp_wakeup_core(mpctx);
+        audio_start_ao(mpctx);
     }
 
     if (!mpctx->restart_complete) {
@@ -1142,8 +1145,8 @@ static void handle_playback_restart(struct MPContext *mpctx)
         mp_wakeup_core(mpctx);
         update_ab_loop_clip(mpctx);
         MP_VERBOSE(mpctx, "playback restart complete @ %f, audio=%s, video=%s\n",
-                   mpctx->playback_pts, mp_status_str(mpctx->video_status),
-                   mp_status_str(mpctx->audio_status));
+                   mpctx->playback_pts, mp_status_str(mpctx->audio_status),
+                   mp_status_str(mpctx->video_status));
 
         // Continuous seeks past EOF => treat as EOF instead of repeating seek.
         if (mpctx->seek.type == MPSEEK_RELATIVE && mpctx->seek.amount > 0 &&
@@ -1155,6 +1158,9 @@ static void handle_playback_restart(struct MPContext *mpctx)
 
 static void handle_eof(struct MPContext *mpctx)
 {
+    if (mpctx->seek.type)
+        return; // for proper keep-open operation
+
     /* Don't quit while paused and we're displaying the last video frame. On the
      * other hand, if we don't have a video frame, then the user probably seeked
      * outside of the video, and we do want to quit. */

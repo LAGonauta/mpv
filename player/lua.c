@@ -36,6 +36,7 @@
 #include "options/m_property.h"
 #include "common/msg.h"
 #include "common/msg_control.h"
+#include "common/stats.h"
 #include "options/m_option.h"
 #include "input/input.h"
 #include "options/path.h"
@@ -56,25 +57,28 @@
 // All these are generated from player/lua/*.lua
 static const char * const builtin_lua_scripts[][2] = {
     {"mp.defaults",
-#   include "player/lua/defaults.inc"
+#   include "generated/player/lua/defaults.lua.inc"
     },
     {"mp.assdraw",
-#   include "player/lua/assdraw.inc"
+#   include "generated/player/lua/assdraw.lua.inc"
     },
     {"mp.options",
-#   include "player/lua/options.inc"
+#   include "generated/player/lua/options.lua.inc"
     },
     {"@osc.lua",
-#   include "player/lua/osc.inc"
+#   include "generated/player/lua/osc.lua.inc"
     },
     {"@ytdl_hook.lua",
-#   include "player/lua/ytdl_hook.inc"
+#   include "generated/player/lua/ytdl_hook.lua.inc"
     },
     {"@stats.lua",
-#   include "player/lua/stats.inc"
+#   include "generated/player/lua/stats.lua.inc"
     },
     {"@console.lua",
-#   include "player/lua/console.inc"
+#   include "generated/player/lua/console.lua.inc"
+    },
+    {"@auto_profiles.lua",
+#   include "generated/player/lua/auto_profiles.lua.inc"
     },
     {0}
 };
@@ -88,6 +92,10 @@ struct script_ctx {
     struct mp_log *log;
     struct mpv_handle *client;
     struct MPContext *mpctx;
+    size_t lua_malloc_size;
+    lua_Alloc lua_allocf;
+    void *lua_alloc_ud;
+    struct stats_ctx *stats;
 };
 
 #if LUA_VERSION_NUM <= 501
@@ -156,6 +164,27 @@ static void steal_node_alloctions(void *tmp, mpv_node *node)
     talloc_steal(tmp, node_get_alloc(node));
 }
 
+// lua_Alloc compatible. Serves only to track memory usage. This wraps the
+// existing allocator, partly because luajit requires the use of its internal
+// allocator on 64-bit platforms.
+static void *mp_lua_alloc(void *ud, void *ptr, size_t osize, size_t nsize)
+{
+    struct script_ctx *ctx = ud;
+
+    // Ah, what the fuck, screw whoever introduced this to Lua 5.2.
+    if (!ptr)
+        osize = 0;
+
+    ptr = ctx->lua_allocf(ctx->lua_alloc_ud, ptr, osize, nsize);
+    if (nsize && !ptr)
+        return NULL; // allocation failed, so original memory left untouched
+
+    ctx->lua_malloc_size = ctx->lua_malloc_size - osize + nsize;
+    stats_size_value(ctx->stats, "mem", ctx->lua_malloc_size);
+
+    return ptr;
+}
+
 static struct script_ctx *get_ctx(lua_State *L)
 {
     lua_getfield(L, LUA_REGISTRYINDEX, "ctx");
@@ -204,10 +233,13 @@ static void load_file(lua_State *L, const char *fname)
 {
     struct script_ctx *ctx = get_ctx(L);
     MP_DBG(ctx, "loading file %s\n", fname);
-    int r = luaL_loadfile(L, fname);
-    if (r)
+    struct bstr s = stream_read_file(fname, ctx, ctx->mpctx->global, 100000000);
+    if (!s.start)
+        luaL_error(L, "Could not read file.\n");
+    if (luaL_loadbuffer(L, s.start, s.len, fname))
         lua_error(L);
-    lua_call(L, 0, 0);
+    lua_call(L, 0, 1);
+    talloc_free(s.start);
 }
 
 static int load_builtin(lua_State *L)
@@ -396,7 +428,11 @@ static int load_lua(struct mp_script_args *args)
         .log = args->log,
         .filename = args->filename,
         .path = args->path,
+        .stats = stats_ctx_create(ctx, args->mpctx->global,
+                    mp_tprintf(80, "script/%s", mpv_client_name(args->client))),
     };
+
+    stats_register_thread_cputime(ctx->stats, "cpu");
 
     if (LUA_VERSION_NUM != 501 && LUA_VERSION_NUM != 502) {
         MP_FATAL(ctx, "Only Lua 5.1 and 5.2 are supported.\n");
@@ -408,6 +444,10 @@ static int load_lua(struct mp_script_args *args)
         MP_FATAL(ctx, "Could not initialize Lua.\n");
         goto error_out;
     }
+
+    // Wrap the internal allocator with our version that does accounting
+    ctx->lua_allocf = lua_getallocf(L, &ctx->lua_alloc_ud);
+    lua_setallocf(L, mp_lua_alloc, ctx);
 
     if (mp_cpcall(L, run_lua, ctx)) {
         const char *err = "unknown error";
@@ -636,10 +676,21 @@ static void makenode(void *tmp, mpv_node *dst, lua_State *L, int t)
         dst->format = MPV_FORMAT_FLAG;
         dst->u.flag = !!lua_toboolean(L, t);
         break;
-    case LUA_TSTRING:
-        dst->format = MPV_FORMAT_STRING;
-        dst->u.string = talloc_strdup(tmp, lua_tostring(L, t));
+    case LUA_TSTRING: {
+        size_t len = 0;
+        char *s = (char *)lua_tolstring(L, t, &len);
+        bool has_zeros = !!memchr(s, 0, len);
+        if (has_zeros) {
+            mpv_byte_array *ba = talloc_zero(tmp, mpv_byte_array);
+            *ba = (mpv_byte_array){talloc_memdup(tmp, s, len), len};
+            dst->format = MPV_FORMAT_BYTE_ARRAY;
+            dst->u.ba = ba;
+        } else {
+            dst->format = MPV_FORMAT_STRING;
+            dst->u.string = talloc_strdup(tmp, s);
+        }
         break;
+    }
     case LUA_TTABLE: {
         // Lua uses the same type for arrays and maps, so guess the correct one.
         int format = MPV_FORMAT_NONE;
@@ -1148,6 +1199,16 @@ static int script_format_json(lua_State *L, void *tmp)
     return 2;
 }
 
+static int script_get_env_list(lua_State *L)
+{
+    lua_newtable(L); // table
+    for (int n = 0; environ && environ[n]; n++) {
+        lua_pushstring(L, environ[n]); // table str
+        lua_rawseti(L, -2, n + 1); // table
+    }
+    return 1;
+}
+
 #define FN_ENTRY(name) {#name, script_ ## name, 0}
 #define AF_ENTRY(name) {#name, 0, script_ ## name}
 struct fn_entry {
@@ -1200,6 +1261,7 @@ static const struct fn_entry utils_fns[] = {
     FN_ENTRY(getpid),
     AF_ENTRY(parse_json),
     AF_ENTRY(format_json),
+    FN_ENTRY(get_env_list),
     {0}
 };
 

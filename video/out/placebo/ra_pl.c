@@ -6,6 +6,7 @@
 
 struct ra_pl {
     const struct pl_gpu *gpu;
+    struct ra_timer_pl *active_timer;
 };
 
 static inline const struct pl_gpu *get_gpu(const struct ra *ra)
@@ -20,6 +21,10 @@ const struct pl_gpu *ra_pl_get(const struct ra *ra)
 {
     return ra->fns == &ra_fns_pl ? get_gpu(ra) : NULL;
 }
+
+#if PL_API_VER >= 60
+static struct pl_timer *get_active_timer(const struct ra *ra);
+#endif
 
 struct ra *ra_create_pl(const struct pl_gpu *gpu, struct mp_log *log)
 {
@@ -216,47 +221,93 @@ static void tex_destroy_pl(struct ra *ra, struct ra_tex *tex)
     talloc_free(tex);
 }
 
-static int texel_stride_w(size_t stride, const struct pl_tex *tex)
-{
-    size_t texel_size = tex->params.format->texel_size;
-    int texels = stride / texel_size;
-    assert(texels * texel_size == stride);
-    return texels;
-}
-
 static bool tex_upload_pl(struct ra *ra, const struct ra_tex_upload_params *params)
 {
+    const struct pl_gpu *gpu = get_gpu(ra);
     const struct pl_tex *tex = params->tex->priv;
     struct pl_tex_transfer_params pl_params = {
         .tex = tex,
         .buf = params->buf ? params->buf->priv : NULL,
         .buf_offset = params->buf_offset,
         .ptr = (void *) params->src,
+#if PL_API_VER >= 60
+        .timer = get_active_timer(ra),
+#endif
     };
 
+    const struct pl_buf *staging = NULL;
+
     if (params->tex->params.dimensions == 2) {
-        pl_params.stride_w = texel_stride_w(params->stride, tex);
+        size_t texel_size = tex->params.format->texel_size;
+        pl_params.stride_w = params->stride / texel_size;
+        size_t stride = pl_params.stride_w * texel_size;
+        int lines = tex->params.h;
         if (params->rc) {
             pl_params.rc = (struct pl_rect3d) {
                 .x0 = params->rc->x0, .x1 = params->rc->x1,
                 .y0 = params->rc->y0, .y1 = params->rc->y1,
             };
+            lines = pl_rect_h(pl_params.rc);
+        }
+
+        if (stride != params->stride) {
+            // Fall back to uploading via a staging buffer prepared in CPU
+            staging = pl_buf_create(gpu, &(struct pl_buf_params) {
+                .type = PL_BUF_TEX_TRANSFER,
+                .size = lines * stride,
+                .memory_type = PL_BUF_MEM_HOST,
+                .host_mapped = true,
+            });
+            if (!staging)
+                return false;
+
+            const uint8_t *src = params->buf ? params->buf->data : params->src;
+            assert(src);
+            for (int y = 0; y < lines; y++)
+                memcpy(staging->data + y * stride, src + y * params->stride, stride);
+
+            pl_params.ptr = NULL;
+            pl_params.buf = staging;
+            pl_params.buf_offset = 0;
         }
     }
 
-    return pl_tex_upload(get_gpu(ra), &pl_params);
+    bool ok = pl_tex_upload(gpu, &pl_params);
+    pl_buf_destroy(gpu, &staging);
+    return ok;
 }
 
 static bool tex_download_pl(struct ra *ra, struct ra_tex_download_params *params)
 {
     const struct pl_tex *tex = params->tex->priv;
+    size_t texel_size = tex->params.format->texel_size;
     struct pl_tex_transfer_params pl_params = {
         .tex = tex,
         .ptr = params->dst,
-        .stride_w = texel_stride_w(params->stride, tex),
+        .stride_w = params->stride / texel_size,
+#if PL_API_VER >= 60
+        .timer = get_active_timer(ra),
+#endif
     };
 
-    return pl_tex_download(get_gpu(ra), &pl_params);
+    uint8_t *staging = NULL;
+    size_t stride = pl_params.stride_w * texel_size;
+    if (stride != params->stride) {
+        staging = talloc_size(NULL, tex->params.h * stride);
+        pl_params.ptr = staging;
+    }
+
+    bool ok = pl_tex_download(get_gpu(ra), &pl_params);
+    if (ok && staging) {
+        for (int y = 0; y < tex->params.h; y++) {
+            memcpy((uint8_t *) params->dst + y * params->stride,
+                   staging + y * stride,
+                   stride);
+        }
+    }
+
+    talloc_free(staging);
+    return ok;
 }
 
 static struct ra_buf *buf_create_pl(struct ra *ra,
@@ -596,6 +647,9 @@ static void renderpass_run_pl(struct ra *ra,
         .num_var_updates = p->num_varups,
         .desc_bindings = p->binds,
         .push_constants = params->push_constants,
+#if PL_API_VER >= 60
+        .timer = get_active_timer(ra),
+#endif
     };
 
     if (p->pl_pass->params.type == PL_PASS_RASTER) {
@@ -611,6 +665,81 @@ static void renderpass_run_pl(struct ra *ra,
 
     pl_pass_run(get_gpu(ra), &pl_params);
 }
+
+#if PL_API_VER >= 60
+
+struct ra_timer_pl {
+    // Because libpplacebo only supports one operation per timer, we need
+    // to use multiple pl_timers to sum up multiple passes/transfers
+    struct pl_timer **timers;
+    int num_timers;
+    int idx_timers;
+};
+
+static ra_timer *timer_create_pl(struct ra *ra)
+{
+    struct ra_timer_pl *t = talloc_zero(ra, struct ra_timer_pl);
+    return t;
+}
+
+static void timer_destroy_pl(struct ra *ra, ra_timer *timer)
+{
+    const struct pl_gpu *gpu = get_gpu(ra);
+    struct ra_timer_pl *t = timer;
+
+    for (int i = 0; i < t->num_timers; i++)
+        pl_timer_destroy(gpu, &t->timers[i]);
+
+    talloc_free(t);
+}
+
+static void timer_start_pl(struct ra *ra, ra_timer *timer)
+{
+    struct ra_pl *p = ra->priv;
+    struct ra_timer_pl *t = timer;
+
+    // There's nothing easy we can do in this case, since libplacebo only
+    // supports one timer object per operation; so just ignore "inner" timers
+    // when the user is nesting different timer queries
+    if (p->active_timer)
+        return;
+
+    p->active_timer = t;
+    t->idx_timers = 0;
+}
+
+static uint64_t timer_stop_pl(struct ra *ra, ra_timer *timer)
+{
+    struct ra_pl *p = ra->priv;
+    struct ra_timer_pl *t = timer;
+
+    if (p->active_timer != t)
+        return 0;
+
+    p->active_timer = NULL;
+
+    // Sum up all of the active results
+    uint64_t res = 0;
+    for (int i = 0; i < t->idx_timers; i++)
+        res += pl_timer_query(p->gpu, t->timers[i]);
+
+    return res;
+}
+
+static struct pl_timer *get_active_timer(const struct ra *ra)
+{
+    struct ra_pl *p = ra->priv;
+    if (!p->active_timer)
+        return NULL;
+
+    struct ra_timer_pl *t = p->active_timer;
+    if (t->idx_timers == t->num_timers)
+        MP_TARRAY_APPEND(t, t->timers, t->num_timers, pl_timer_create(p->gpu));
+
+    return t->timers[t->idx_timers++];
+}
+
+#endif // PL_API_VER >= 60
 
 static struct ra_fns ra_fns_pl = {
     .destroy                = destroy_ra_pl,
@@ -630,5 +759,11 @@ static struct ra_fns ra_fns_pl = {
     .renderpass_create      = renderpass_create_pl,
     .renderpass_destroy     = renderpass_destroy_pl,
     .renderpass_run         = renderpass_run_pl,
+#if PL_API_VER >= 60
+    .timer_create           = timer_create_pl,
+    .timer_destroy          = timer_destroy_pl,
+    .timer_start            = timer_start_pl,
+    .timer_stop             = timer_stop_pl,
+#endif
 };
 

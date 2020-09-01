@@ -275,11 +275,14 @@ void reinit_video_chain_src(struct MPContext *mpctx, struct track *track)
 
     update_screensaver_state(mpctx);
 
-    vo_set_paused(vo_c->vo, mpctx->paused);
+    vo_set_paused(vo_c->vo, get_internal_paused(mpctx));
 
     // If we switch on video again, ensure audio position matches up.
-    if (mpctx->ao_chain)
+    if (mpctx->ao_chain && mpctx->ao_chain->ao) {
+        ao_reset(mpctx->ao_chain->ao);
+        mpctx->ao_chain->start_pts_known = false;
         mpctx->audio_status = STATUS_SYNCING;
+    }
 
     reset_video_state(mpctx);
     reset_subtitle_state(mpctx);
@@ -659,12 +662,12 @@ double calc_average_frame_duration(struct MPContext *mpctx)
 // effective video FPS. If this is not possible, try to do it for multiples,
 // which still leads to an improved end result.
 // Both parameters are durations in seconds.
-static double calc_best_speed(double vsync, double frame)
+static double calc_best_speed(double vsync, double frame, int max_factor)
 {
     double ratio = frame / vsync;
     double best_scale = -1;
     double best_dev = INFINITY;
-    for (int factor = 1; factor <= 5; factor++) {
+    for (int factor = 1; factor <= max_factor; factor++) {
         double scale = ratio * factor / rint(ratio * factor);
         double dev = fabs(scale - 1);
         if (dev < best_dev) {
@@ -683,7 +686,8 @@ static double find_best_speed(struct MPContext *mpctx, double vsync)
         double dur = mpctx->past_frames[n].approx_duration;
         if (dur <= 0)
             continue;
-        total += calc_best_speed(vsync, dur / mpctx->opts->playback_speed);
+        total += calc_best_speed(vsync, dur / mpctx->opts->playback_speed,
+                                 mpctx->opts->sync_max_factor);
         num++;
     }
     return num > 0 ? total / num : 1;
@@ -799,12 +803,6 @@ static void handle_display_sync_frame(struct MPContext *mpctx,
 
     mpctx->display_sync_active = false;
 
-    if (mode == VS_DISP_ADROP && !mpctx->audio_drop_deprecated_msg) {
-        MP_WARN(mpctx, "video-sync=display-adrop mode is deprecated and will "
-                       "be removed in the future.\n");
-        mpctx->audio_drop_deprecated_msg = true;
-    }
-
     if (!VS_IS_DISP(mode))
         return;
     bool resample = mode == VS_DISP_RESAMPLE || mode == VS_DISP_RESAMPLE_VDROP ||
@@ -897,7 +895,7 @@ static void handle_display_sync_frame(struct MPContext *mpctx,
     mpctx->past_frames[0].num_vsyncs = num_vsyncs;
     mpctx->past_frames[0].av_diff = mpctx->last_av_difference;
 
-    if (resample) {
+    if (resample || mode == VS_DISP_ADROP) {
         adjust_audio_resample_speed(mpctx, vsync);
     } else {
         mpctx->speed_factor_a = 1.0;
@@ -1108,8 +1106,10 @@ void write_video(struct MPContext *mpctx)
     struct mp_image_params p = mpctx->next_frames[0]->params;
     if (!vo->params || !mp_image_params_equal(&p, vo->params)) {
         // Changing config deletes the current frame; wait until it's finished.
-        if (vo_still_displaying(vo))
+        if (vo_still_displaying(vo)) {
+            vo_request_wakeup_on_done(vo);
             return;
+        }
 
         const struct vo_driver *info = mpctx->video_out->driver;
         char extra[20] = {0};
@@ -1241,7 +1241,8 @@ void write_video(struct MPContext *mpctx)
 
     vo_c->underrun_signaled = false;
 
-    mp_wakeup_core(mpctx);
+    if (mpctx->video_status == STATUS_EOF || mpctx->stop_play)
+        mp_wakeup_core(mpctx);
     return;
 
 error:

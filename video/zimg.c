@@ -17,11 +17,17 @@
 
 #include <math.h>
 
+#include <libavutil/cpu.h>
+
 #include "common/common.h"
 #include "common/msg.h"
 #include "csputils.h"
+#include "misc/thread_pool.h"
+#include "misc/thread_tools.h"
 #include "options/m_config.h"
 #include "options/m_option.h"
+#include "repack.h"
+#include "video/fmt-conversion.h"
 #include "video/img_format.h"
 #include "zimg.h"
 
@@ -37,6 +43,15 @@ static const struct m_opt_choice_alternatives mp_zimg_scalers[] = {
     {"spline36",        ZIMG_RESIZE_SPLINE36},
     {"lanczos",         ZIMG_RESIZE_LANCZOS},
     {0}
+};
+
+const struct zimg_opts zimg_opts_defaults = {
+    .scaler = ZIMG_RESIZE_LANCZOS,
+    .scaler_params = {NAN, NAN},
+    .scaler_chroma_params = {NAN, NAN},
+    .scaler_chroma = ZIMG_RESIZE_BILINEAR,
+    .dither = ZIMG_DITHER_RANDOM,
+    .fast = 1,
 };
 
 #define OPT_PARAM(var) OPT_DOUBLE(var), .flags = M_OPT_DEFAULT_NAN
@@ -56,51 +71,43 @@ const struct m_sub_options zimg_conf = {
             {"random",          ZIMG_DITHER_RANDOM},
             {"error-diffusion", ZIMG_DITHER_ERROR_DIFFUSION})},
         {"fast", OPT_FLAG(fast)},
+        {"threads", OPT_CHOICE(threads, {"auto", 0}), M_RANGE(1, 64)},
         {0}
     },
     .size = sizeof(struct zimg_opts),
-    .defaults = &(const struct zimg_opts){
-        .scaler = ZIMG_RESIZE_LANCZOS,
-        .scaler_params = {NAN, NAN},
-        .scaler_chroma_params = {NAN, NAN},
-        .scaler_chroma = ZIMG_RESIZE_BILINEAR,
-        .dither = ZIMG_DITHER_RANDOM,
-        .fast = 1,
-    },
+    .defaults = &zimg_opts_defaults,
+};
+
+struct mp_zimg_state {
+    zimg_filter_graph *graph;
+    void *tmp;
+    void *tmp_alloc;
+    struct mp_zimg_repack *src;
+    struct mp_zimg_repack *dst;
+    int slice_y, slice_h; // y start position, height of target slice
+    double scale_y;
+    struct mp_waiter thread_waiter;
 };
 
 struct mp_zimg_repack {
     bool pack;                  // if false, this is for unpacking
-    struct mp_image_params fmt; // original mp format (possibly packed format)
+    struct mp_image_params fmt; // original mp format (possibly packed format,
+                                // swapped endian)
     int zimgfmt;                // zimg equivalent unpacked format
     int num_planes;             // number of planes involved
     unsigned zmask[4];          // zmask[mp_index] = zimg mask (using mp index!)
     int z_planes[4];            // z_planes[zimg_index] = mp_index (or -1)
-    bool pass_through_y;        // luma plane optimization for e.g. nv12
 
-    // If set, the pack/unpack callback to pass to zimg.
-    // Called with user==mp_zimg_repack.
-    zimg_filter_graph_callback repack;
-
-    // For packed_repack.
-    int components[4];          // p2[n] = mp_image.planes[components[n]]
-    //  pack:   p1 is dst, p2 is src
-    //  unpack: p1 is src, p2 is dst
-    void (*packed_repack_scanline)(void *p1, void *p2[], int x0, int x1);
+    struct mp_repack *repack;   // converting to/from planar
 
     // Temporary memory for slice-wise repacking. This may be set even if repack
     // is not set (then it may be used to avoid alignment issues). This has
     // about one slice worth of data.
     struct mp_image *tmp;
 
-    // Temporary, per-call source/target frame. (Regrettably a mutable field,
-    // but it's not the only one, and makes the callbacks much less of a mess
-    // by avoiding another "closure" indirection.)
-    // To be used by the repack callback.
-    struct mp_image *mpi;
-
-    // Also temporary, per-call. use_buf[n] == plane n uses tmp (and not mpi).
-    bool use_buf[4];
+    // Temporary memory for zimg buffer.
+    zimg_image_buffer zbuf;
+    struct mp_image cropped_tmp;
 
     int real_w, real_h;         // aligned size
 };
@@ -181,12 +188,15 @@ static zimg_color_primaries_e mp_to_z_prim(enum mp_csp_prim prim)
 
 static void destroy_zimg(struct mp_zimg_context *ctx)
 {
-    free(ctx->zimg_tmp);
-    ctx->zimg_tmp = NULL;
-    zimg_filter_graph_free(ctx->zimg_graph);
-    ctx->zimg_graph = NULL;
-    TA_FREEP(&ctx->zimg_src);
-    TA_FREEP(&ctx->zimg_dst);
+    for (int n = 0; n < ctx->num_states; n++) {
+        struct mp_zimg_state *st = ctx->states[n];
+        talloc_free(st->tmp_alloc);
+        zimg_filter_graph_free(st->graph);
+        TA_FREEP(&st->src);
+        TA_FREEP(&st->dst);
+        talloc_free(st);
+    }
+    ctx->num_states = 0;
 }
 
 static void free_mp_zimg(void *p)
@@ -194,6 +204,7 @@ static void free_mp_zimg(void *p)
     struct mp_zimg_context *ctx = p;
 
     destroy_zimg(ctx);
+    TA_FREEP(&ctx->tp);
 }
 
 struct mp_zimg_context *mp_zimg_alloc(void)
@@ -218,275 +229,50 @@ void mp_zimg_enable_cmdline_opts(struct mp_zimg_context *ctx,
     mp_zimg_update_from_cmdline(ctx); // first update
 }
 
-static int repack_align(void *user, unsigned i, unsigned x0, unsigned x1)
+static int repack_entrypoint(void *user, unsigned i, unsigned x0, unsigned x1)
 {
     struct mp_zimg_repack *r = user;
 
-    for (int p = 0; p < r->mpi->fmt.num_planes; p++) {
-        if (!r->use_buf[p])
-            continue;
+    // If reading is not aligned, just read slightly more data.
+    if (!r->pack)
+        x0 &= ~(unsigned)(mp_repack_get_align_x(r->repack) - 1);
 
-        int bpp = r->mpi->fmt.bytes[p];
-        int xs = r->mpi->fmt.xs[p];
-        int ys = r->mpi->fmt.ys[p];
-        // Number of lines on this plane.
-        int h = (1 << r->mpi->fmt.chroma_ys) - (1 << ys) + 1;
+    // mp_repack requirements and zimg guarantees.
+    assert(!(i & (mp_repack_get_align_y(r->repack) - 1)));
+    assert(!(x0 & (mp_repack_get_align_x(r->repack) - 1)));
 
-        for (int y = i; y < i + h; y++) {
-            void *a = r->mpi->planes[p] +
-                      r->mpi->stride[p] * (ptrdiff_t)(y >> ys) +
-                      bpp * (x0 >> xs);
-            void *b = r->tmp->planes[p] +
-                      r->tmp->stride[p] * (ptrdiff_t)((y >> ys) & r->zmask[p]) +
-                      bpp * (x0 >> xs);
-            size_t size = ((x1 - x0) >> xs) * bpp;
-            if (r->pack) {
-                memcpy(a, b, size);
-            } else {
-                memcpy(b, a, size);
-            }
-        }
-    }
+    unsigned i_src = i & (r->pack ? r->zmask[0] : ZIMG_BUFFER_MAX);
+    unsigned i_dst = i & (r->pack ? ZIMG_BUFFER_MAX : r->zmask[0]);
+
+    repack_line(r->repack, x0, i_dst, x0, i_src, x1 - x0);
 
     return 0;
 }
 
-// PA = PAck, copy planar input to single packed array
-// UN = UNpack, copy packed input to planar output
-// Naming convention:
-//  pa_/un_ prefix to identify conversion direction.
-//  Left (LSB, lowest byte address) -> Right (MSB, highest byte address).
-//      (This is unusual; MSB to LSB is more commonly used to describe formats,
-//       but our convention makes more sense for byte access in little endian.)
-//  "c" identifies a color component.
-//  "z" identifies known zero padding.
-//  "x" identifies uninitialized padding.
-//  A component is followed by its size in bits.
-//  Size can be omitted for multiple uniform components (c8c8c8 == ccc8).
-// Unpackers will often use "x" for padding, because they ignore it, while
-// packers will use "z" because they write zero.
-
-#define PA_WORD_4(name, packed_t, plane_t, sh_c0, sh_c1, sh_c2, sh_c3)      \
-    static void name(void *dst, void *src[], int x0, int x1) {              \
-        for (int x = x0; x < x1; x++) {                                     \
-            ((packed_t *)dst)[x] =                                          \
-                ((packed_t)((plane_t *)src[0])[x] << (sh_c0)) |             \
-                ((packed_t)((plane_t *)src[1])[x] << (sh_c1)) |             \
-                ((packed_t)((plane_t *)src[2])[x] << (sh_c2)) |             \
-                ((packed_t)((plane_t *)src[3])[x] << (sh_c3));              \
-        }                                                                   \
-    }
-
-#define UN_WORD_4(name, packed_t, plane_t, sh_c0, sh_c1, sh_c2, sh_c3, mask)\
-    static void name(void *src, void *dst[], int x0, int x1) {              \
-        for (int x = x0; x < x1; x++) {                                     \
-            packed_t c = ((packed_t *)src)[x];                              \
-            ((plane_t *)dst[0])[x] = (c >> (sh_c0)) & (mask);               \
-            ((plane_t *)dst[1])[x] = (c >> (sh_c1)) & (mask);               \
-            ((plane_t *)dst[2])[x] = (c >> (sh_c2)) & (mask);               \
-            ((plane_t *)dst[3])[x] = (c >> (sh_c3)) & (mask);               \
-        }                                                                   \
-    }
-
-
-#define PA_WORD_3(name, packed_t, plane_t, sh_c0, sh_c1, sh_c2, pad)        \
-    static void name(void *dst, void *src[], int x0, int x1) {              \
-        for (int x = x0; x < x1; x++) {                                     \
-            ((packed_t *)dst)[x] = (pad) |                                  \
-                ((packed_t)((plane_t *)src[0])[x] << (sh_c0)) |             \
-                ((packed_t)((plane_t *)src[1])[x] << (sh_c1)) |             \
-                ((packed_t)((plane_t *)src[2])[x] << (sh_c2));              \
-        }                                                                   \
-    }
-
-UN_WORD_4(un_cccc8,  uint32_t, uint8_t,  0, 8,  16, 24, 0xFFu)
-PA_WORD_4(pa_cccc8,  uint32_t, uint8_t,  0, 8,  16, 24)
-// Not sure if this is a good idea; there may be no alignment guarantee.
-UN_WORD_4(un_cccc16,  uint64_t, uint16_t,  0, 16,  32, 48, 0xFFFFu)
-PA_WORD_4(pa_cccc16,  uint64_t, uint16_t,  0, 16,  32, 48)
-
-#define UN_WORD_3(name, packed_t, plane_t, sh_c0, sh_c1, sh_c2, mask)       \
-    static void name(void *src, void *dst[], int x0, int x1) {              \
-        for (int x = x0; x < x1; x++) {                                     \
-            packed_t c = ((packed_t *)src)[x];                              \
-            ((plane_t *)dst[0])[x] = (c >> (sh_c0)) & (mask);               \
-            ((plane_t *)dst[1])[x] = (c >> (sh_c1)) & (mask);               \
-            ((plane_t *)dst[2])[x] = (c >> (sh_c2)) & (mask);               \
-        }                                                                   \
-    }
-
-UN_WORD_3(un_ccc8x8,  uint32_t, uint8_t,  0, 8,  16, 0xFFu)
-PA_WORD_3(pa_ccc8z8,  uint32_t, uint8_t,  0, 8,  16, 0)
-UN_WORD_3(un_x8ccc8,  uint32_t, uint8_t,  8, 16, 24, 0xFFu)
-PA_WORD_3(pa_z8ccc8,  uint32_t, uint8_t,  8, 16, 24, 0)
-UN_WORD_3(un_ccc10x2, uint32_t, uint16_t, 0, 10, 20, 0x3FFu)
-PA_WORD_3(pa_ccc10z2, uint32_t, uint16_t, 20, 10, 0, 0)
-
-#define PA_WORD_2(name, packed_t, plane_t, sh_c0, sh_c1, pad)               \
-    static void name(void *dst, void *src[], int x0, int x1) {              \
-        for (int x = x0; x < x1; x++) {                                     \
-            ((packed_t *)dst)[x] = (pad) |                                  \
-                ((packed_t)((plane_t *)src[0])[x] << (sh_c0)) |             \
-                ((packed_t)((plane_t *)src[1])[x] << (sh_c1));              \
-        }                                                                   \
-    }
-
-#define UN_WORD_2(name, packed_t, plane_t, sh_c0, sh_c1, mask)              \
-    static void name(void *src, void *dst[], int x0, int x1) {              \
-        for (int x = x0; x < x1; x++) {                                     \
-            packed_t c = ((packed_t *)src)[x];                              \
-            ((plane_t *)dst[0])[x] = (c >> (sh_c0)) & (mask);               \
-            ((plane_t *)dst[1])[x] = (c >> (sh_c1)) & (mask);               \
-        }                                                                   \
-    }
-
-UN_WORD_2(un_cc8,  uint16_t, uint8_t,  0, 8,  0xFFu)
-PA_WORD_2(pa_cc8,  uint16_t, uint8_t,  0, 8,  0)
-UN_WORD_2(un_cc16, uint32_t, uint16_t, 0, 16, 0xFFFFu)
-PA_WORD_2(pa_cc16, uint32_t, uint16_t, 0, 16, 0)
-
-#define PA_SEQ_3(name, comp_t)                                              \
-    static void name(void *dst, void *src[], int x0, int x1) {              \
-        comp_t *r = dst;                                                    \
-        for (int x = x0; x < x1; x++) {                                     \
-            *r++ = ((comp_t *)src[0])[x];                                   \
-            *r++ = ((comp_t *)src[1])[x];                                   \
-            *r++ = ((comp_t *)src[2])[x];                                   \
-        }                                                                   \
-    }
-
-#define UN_SEQ_3(name, comp_t)                                              \
-    static void name(void *src, void *dst[], int x0, int x1) {              \
-        comp_t *r = src;                                                    \
-        for (int x = x0; x < x1; x++) {                                     \
-            ((comp_t *)dst[0])[x] = *r++;                                   \
-            ((comp_t *)dst[1])[x] = *r++;                                   \
-            ((comp_t *)dst[2])[x] = *r++;                                   \
-        }                                                                   \
-    }
-
-UN_SEQ_3(un_ccc8,  uint8_t)
-PA_SEQ_3(pa_ccc8,  uint8_t)
-UN_SEQ_3(un_ccc16, uint16_t)
-PA_SEQ_3(pa_ccc16, uint16_t)
-
-// "regular": single packed plane, all components have same width (except padding)
-struct regular_repacker {
-    int packed_width;       // number of bits of the packed pixel
-    int component_width;    // number of bits for a single component
-    int prepadding;         // number of bits of LSB padding
-    int num_components;     // number of components that can be accessed
-    void (*pa_scanline)(void *p1, void *p2[], int x0, int x1);
-    void (*un_scanline)(void *p1, void *p2[], int x0, int x1);
-};
-
-static const struct regular_repacker regular_repackers[] = {
-    {32, 8,  0, 3, pa_ccc8z8,  un_ccc8x8},
-    {32, 8,  8, 3, pa_z8ccc8,  un_x8ccc8},
-    {32, 8,  0, 4, pa_cccc8,   un_cccc8},
-    {64, 16, 0, 4, pa_cccc16,  un_cccc16},
-    {24, 8,  0, 3, pa_ccc8,    un_ccc8},
-    {48, 16, 0, 3, pa_ccc16,   un_ccc16},
-    {16, 8,  0, 2, pa_cc8,     un_cc8},
-    {32, 16, 0, 2, pa_cc16,    un_cc16},
-    {32, 10, 0, 3, pa_ccc10z2, un_ccc10x2},
-};
-
-static int packed_repack(void *user, unsigned i, unsigned x0, unsigned x1)
+static bool wrap_buffer(struct mp_zimg_state *st, struct mp_zimg_repack *r,
+                        struct mp_image *a_mpi)
 {
-    struct mp_zimg_repack *r = user;
-
-    uint32_t *p1 =
-        (void *)(r->mpi->planes[0] + r->mpi->stride[0] * (ptrdiff_t)i);
-
-    void *p2[4] = {0};
-    for (int p = 0; p < r->num_planes; p++) {
-        int s = r->components[p];
-        p2[p] = r->tmp->planes[s] +
-                r->tmp->stride[s] * (ptrdiff_t)(i & r->zmask[s]);
-    }
-
-    r->packed_repack_scanline(p1, p2, x0, x1);
-
-    return 0;
-}
-
-static int unpack_pal(void *user, unsigned i, unsigned x0, unsigned x1)
-{
-    struct mp_zimg_repack *r = user;
-
-    uint8_t *src = (void *)(r->mpi->planes[0] + r->mpi->stride[0] * (ptrdiff_t)i);
-    uint32_t *pal = (void *)r->mpi->planes[1];
-
-    uint8_t *dst[4] = {0};
-    for (int p = 0; p < r->num_planes; p++) {
-        dst[p] = r->tmp->planes[p] +
-                 r->tmp->stride[p] * (ptrdiff_t)(i & r->zmask[p]);
-    }
-
-    for (int x = x0; x < x1; x++) {
-        uint32_t c = pal[src[x]];
-        dst[0][x] = (c >>  8) & 0xFF; // G
-        dst[1][x] = (c >>  0) & 0xFF; // B
-        dst[2][x] = (c >> 16) & 0xFF; // R
-        dst[3][x] = (c >> 24) & 0xFF; // A
-    }
-
-    return 0;
-}
-
-static int repack_nv(void *user, unsigned i, unsigned x0, unsigned x1)
-{
-    struct mp_zimg_repack *r = user;
-
-    int xs = r->mpi->fmt.chroma_xs;
-    int ys = r->mpi->fmt.chroma_ys;
-
-    if (r->use_buf[0]) {
-        // Copy Y.
-        int l_h = 1 << ys;
-        for (int y = i; y < i + l_h; y++) {
-            ptrdiff_t bpp = r->mpi->fmt.bytes[0];
-            void *a = r->mpi->planes[0] +
-                    r->mpi->stride[0] * (ptrdiff_t)y + bpp * x0;
-            void *b = r->tmp->planes[0] +
-                    r->tmp->stride[0] * (ptrdiff_t)(y & r->zmask[0]) + bpp * x0;
-            size_t size = (x1 - x0) * bpp;
-            if (r->pack) {
-                memcpy(a, b, size);
-            } else {
-                memcpy(b, a, size);
-            }
-        }
-    }
-
-    uint32_t *p1 =
-        (void *)(r->mpi->planes[1] + r->mpi->stride[1] * (ptrdiff_t)(i >> ys));
-
-    void *p2[2];
-    for (int p = 0; p < 2; p++) {
-        int s = r->components[p];
-        p2[p] = r->tmp->planes[s] +
-                r->tmp->stride[s] * (ptrdiff_t)((i >> ys) & r->zmask[s]);
-    }
-
-    r->packed_repack_scanline(p1, p2, x0 >> xs, x1 >> xs);
-
-    return 0;
-}
-
-static void wrap_buffer(struct mp_zimg_repack *r,
-                        zimg_image_buffer *buf,
-                        zimg_filter_graph_callback *cb,
-                        struct mp_image *mpi)
-{
+    zimg_image_buffer *buf = &r->zbuf;
     *buf = (zimg_image_buffer){ZIMG_API_VERSION};
 
-    bool plane_aligned[4] = {0};
-    for (int n = 0; n < r->num_planes; n++) {
-        plane_aligned[n] = !((uintptr_t)mpi->planes[n] % ZIMG_ALIGN) &&
-                           !(mpi->stride[n] % ZIMG_ALIGN);
+    struct mp_image *mpi = a_mpi;
+    if (r->pack) {
+        mpi = &r->cropped_tmp;
+        *mpi = *a_mpi;
+        mp_image_crop(mpi, 0, st->slice_y, mpi->w, st->slice_y + st->slice_h);
     }
+
+    bool direct[MP_MAX_PLANES] = {0};
+
+    for (int p = 0; p < mpi->num_planes; p++) {
+        // If alignment is good, try to avoid copy.
+        direct[p] = !((uintptr_t)mpi->planes[p] % ZIMG_ALIGN) &&
+                    !(mpi->stride[p] % ZIMG_ALIGN);
+    }
+
+    if (!repack_config_buffers(r->repack, 0, r->pack ? mpi : r->tmp,
+                                          0, r->pack ? r->tmp : mpi, direct))
+        return false;
 
     for (int n = 0; n < MP_ARRAY_SIZE(buf->plane); n++) {
         // Note: this is really the only place we have to care about plane
@@ -497,229 +283,68 @@ static void wrap_buffer(struct mp_zimg_repack *r,
         if (mplane < 0)
             continue;
 
-        r->use_buf[mplane] = !plane_aligned[mplane];
-        if (!(r->pass_through_y && mplane == 0))
-            r->use_buf[mplane] |= !!r->repack;
-
-        struct mp_image *tmpi = r->use_buf[mplane] ? r->tmp : mpi;
+        struct mp_image *tmpi = direct[mplane] ? mpi : r->tmp;
         buf->plane[n].data = tmpi->planes[mplane];
         buf->plane[n].stride = tmpi->stride[mplane];
-        buf->plane[n].mask = r->use_buf[mplane] ? r->zmask[mplane]
-                                                : ZIMG_BUFFER_MAX;
+        buf->plane[n].mask = direct[mplane] ? ZIMG_BUFFER_MAX : r->zmask[mplane];
     }
 
-    *cb = r->repack ? r->repack : repack_align;
-
-    r->mpi = mpi;
+    return true;
 }
 
-static void setup_nv_packer(struct mp_zimg_repack *r)
-{
-    struct mp_regular_imgfmt desc;
-    if (!mp_get_regular_imgfmt(&desc, r->zimgfmt))
-        return;
-
-    // Check for NV.
-    if (desc.num_planes != 2)
-        return;
-    if (desc.planes[0].num_components != 1 || desc.planes[0].components[0] != 1)
-        return;
-    if (desc.planes[1].num_components != 2)
-        return;
-    int cr0 = desc.planes[1].components[0];
-    int cr1 = desc.planes[1].components[1];
-    if (cr0 > cr1)
-        MPSWAP(int, cr0, cr1);
-    if (cr0 != 2 || cr1 != 3)
-        return;
-
-    // Construct equivalent planar format.
-    struct mp_regular_imgfmt desc2 = desc;
-    desc2.num_planes = 3;
-    desc2.planes[1].num_components = 1;
-    desc2.planes[1].components[0] = 2;
-    desc2.planes[2].num_components = 1;
-    desc2.planes[2].components[0] = 3;
-    // For P010. Strangely this concept exists only for the NV format.
-    if (desc2.component_pad > 0)
-        desc2.component_pad = 0;
-
-    int planar_fmt = mp_find_regular_imgfmt(&desc2);
-    if (!planar_fmt)
-        return;
-
-    for (int i = 0; i < MP_ARRAY_SIZE(regular_repackers); i++) {
-        const struct regular_repacker *pa = &regular_repackers[i];
-
-        void (*repack_cb)(void *p1, void *p2[], int x0, int x1) =
-            r->pack ? pa->pa_scanline : pa->un_scanline;
-
-        if (pa->packed_width != desc.component_size * 2 * 8 ||
-            pa->component_width != desc.component_size * 8 ||
-            pa->num_components != 2 ||
-            pa->prepadding != 0 ||
-            !repack_cb)
-            continue;
-
-        r->repack = repack_nv;
-        r->pass_through_y = true;
-        r->packed_repack_scanline = repack_cb;
-        r->zimgfmt = planar_fmt;
-        r->components[0] = desc.planes[1].components[0] - 1;
-        r->components[1] = desc.planes[1].components[1] - 1;
-        return;
-    }
-}
-
-static void setup_misc_packer(struct mp_zimg_repack *r)
-{
-    // Although it's in regular_repackers[], the generic mpv imgfmt metadata
-    // can't handle it yet.
-    if (r->zimgfmt == IMGFMT_RGB30) {
-        struct mp_regular_imgfmt planar10 = {
-            .component_type = MP_COMPONENT_TYPE_UINT,
-            .component_size = 2,
-            .component_pad = -6,
-            .num_planes = 3,
-            .planes = {
-                {1, {1}},
-                {1, {2}},
-                {1, {3}},
-            },
-            .chroma_w = 1,
-            .chroma_h = 1,
-        };
-        int planar_fmt = mp_find_regular_imgfmt(&planar10);
-        if (!planar_fmt)
-            return;
-        r->zimgfmt = planar_fmt;
-        r->repack = packed_repack;
-        r->packed_repack_scanline = r->pack ? pa_ccc10z2 : un_ccc10x2;
-        static int c_order[] = {3, 2, 1};
-        for (int n = 0; n < 3; n++)
-            r->components[n] = c_order[n] - 1;
-    } else if (r->zimgfmt == IMGFMT_PAL8 && !r->pack) {
-        struct mp_regular_imgfmt gbrap = {
-            .component_type = MP_COMPONENT_TYPE_UINT,
-            .forced_csp = MP_CSP_RGB,
-            .component_size = 1,
-            .num_planes = 4,
-            .planes = { {1, {2}}, {1, {3}}, {1, {1}}, {1, {4}}, },
-            .chroma_w = 1,
-            .chroma_h = 1,
-        };
-        int grap_fmt = mp_find_regular_imgfmt(&gbrap);
-        if (!grap_fmt)
-            return;
-        r->zimgfmt = grap_fmt;
-        r->repack = unpack_pal;
-    }
-}
-
-// Tries to set a packer/unpacker for component-wise byte aligned RGB formats.
-static void setup_regular_rgb_packer(struct mp_zimg_repack *r)
-{
-    struct mp_regular_imgfmt desc;
-    if (!mp_get_regular_imgfmt(&desc, r->zimgfmt))
-        return;
-
-    if (desc.num_planes != 1 || desc.planes[0].num_components < 2)
-        return;
-    struct mp_regular_imgfmt_plane *p = &desc.planes[0];
-
-    int num_real_components = 0;
-    bool has_alpha = false;
-    for (int n = 0; n < p->num_components; n++) {
-        if (p->components[n]) {
-            has_alpha |= p->components[n] == 4;
-            num_real_components += 1;
-        } else {
-            // padding must be in MSB or LSB
-            if (n != 0 && n != p->num_components - 1)
-                return;
-        }
-    }
-
-    int depth = desc.component_size * 8 + MPMIN(0, desc.component_pad);
-
-    // Find a physically compatible planar format (typically IMGFMT_420P).
-    struct mp_regular_imgfmt desc2 = desc;
-    desc2.forced_csp = 0;
-    if (desc2.component_pad > 0)
-        desc2.component_pad = 0;
-    desc2.num_planes = num_real_components;
-    for (int n = 0; n < desc2.num_planes; n++) {
-        desc2.planes[n].num_components = 1;
-        desc2.planes[n].components[0] = n + 1;
-    }
-    if (has_alpha)
-        desc2.planes[desc2.num_planes - 1].components[0] = 4;
-    int planar_fmt = mp_find_regular_imgfmt(&desc2);
-    if (!planar_fmt)
-        return;
-
-    for (int i = 0; i < MP_ARRAY_SIZE(regular_repackers); i++) {
-        const struct regular_repacker *pa = &regular_repackers[i];
-
-        // The following may assume little endian (because some repack backends
-        // use word access, while the metadata here uses byte access).
-
-        int prepad = p->components[0] ? 0 : 8;
-        int first_comp = p->components[0] ? 0 : 1;
-        void (*repack_cb)(void *p1, void *p2[], int x0, int x1) =
-            r->pack ? pa->pa_scanline : pa->un_scanline;
-
-        if (pa->packed_width != desc.component_size * p->num_components * 8 ||
-            pa->component_width != depth ||
-            pa->num_components != num_real_components ||
-            pa->prepadding != prepad ||
-            !repack_cb)
-            continue;
-
-        r->repack = packed_repack;
-        r->packed_repack_scanline = repack_cb;
-        r->zimgfmt = planar_fmt;
-        for (int n = 0; n < num_real_components; n++) {
-            // Determine permutation that maps component order between the two
-            // formats, with has_alpha special case (see above).
-            int c = p->components[first_comp + n];
-            r->components[n] = c == 4 ? num_real_components - 1 : c - 1;
-        }
-        return;
-    }
-}
-
-// (ctx can be NULL for the sake of probing.)
+// (ctx and st can be NULL for probing.)
 static bool setup_format(zimg_image_format *zfmt, struct mp_zimg_repack *r,
-                         struct mp_zimg_context *ctx)
+                         bool pack, struct mp_image_params *user_fmt,
+                         struct mp_zimg_context *ctx,
+                         struct mp_zimg_state *st)
 {
+    r->fmt = *user_fmt;
+    r->pack = pack;
+
     zimg_image_format_default(zfmt, ZIMG_API_VERSION);
+
+    int rp_flags = 0;
+
+    // For e.g. RGB565, go to lowest depth on pack for less weird dithering.
+    if (r->pack) {
+        rp_flags |= REPACK_CREATE_ROUND_DOWN;
+    } else {
+        rp_flags |= REPACK_CREATE_EXPAND_8BIT;
+    }
+
+    r->repack = mp_repack_create_planar(r->fmt.imgfmt, r->pack, rp_flags);
+    if (!r->repack)
+        return false;
+
+    int align_x = mp_repack_get_align_x(r->repack);
+
+    r->zimgfmt = r->pack ? mp_repack_get_format_src(r->repack)
+                         : mp_repack_get_format_dst(r->repack);
+
+    if (ctx) {
+        talloc_steal(r, r->repack);
+    } else {
+        TA_FREEP(&r->repack);
+    }
 
     struct mp_image_params fmt = r->fmt;
     mp_image_params_guess_csp(&fmt);
-
-    r->zimgfmt = fmt.imgfmt;
-
-    if (!r->repack)
-        setup_nv_packer(r);
-    if (!r->repack)
-        setup_misc_packer(r);
-    if (!r->repack)
-        setup_regular_rgb_packer(r);
 
     struct mp_regular_imgfmt desc;
     if (!mp_get_regular_imgfmt(&desc, r->zimgfmt))
         return false;
 
+    // Relies on zimg callbacks reading on 64 byte alignment.
+    if (!MP_IS_POWER_OF_2(align_x) || align_x > 64 / desc.component_size)
+        return false;
+
     // no weird stuff
-    if (desc.num_planes > 4 || !MP_IS_POWER_OF_2(desc.chroma_w) ||
-        !MP_IS_POWER_OF_2(desc.chroma_h))
+    if (desc.num_planes > 4)
         return false;
 
     for (int n = 0; n < 4; n++)
         r->z_planes[n] = -1;
 
-    // Accept only true planar formats.
     for (int n = 0; n < desc.num_planes; n++) {
         if (desc.planes[n].num_components != 1)
             return false;
@@ -734,7 +359,8 @@ static bool setup_format(zimg_image_format *zfmt, struct mp_zimg_repack *r,
             r->z_planes[3] = n; // alpha, always plane 4 in zimg
 
 #if HAVE_ZIMG_ALPHA
-            zfmt->alpha = ZIMG_ALPHA_STRAIGHT;
+            zfmt->alpha = fmt.alpha == MP_ALPHA_PREMUL
+                ? ZIMG_ALPHA_PREMULTIPLIED : ZIMG_ALPHA_STRAIGHT;
 #else
             return false;
 #endif
@@ -743,21 +369,31 @@ static bool setup_format(zimg_image_format *zfmt, struct mp_zimg_repack *r,
 
     r->num_planes = desc.num_planes;
 
+    // Take care of input/output size, including slicing.
     // Note: formats with subsampled chroma may have odd width or height in
     // mpv and FFmpeg. This is because the width/height is actually a cropping
     // rectangle. Reconstruct the image allocation size and set the cropping.
-    zfmt->width = r->real_w = MP_ALIGN_UP(fmt.w, desc.chroma_w);
-    zfmt->height = r->real_h = MP_ALIGN_UP(fmt.h, desc.chroma_h);
-    if (!r->pack && ctx) {
-        // Relies on ctx->zimg_dst being initialized first.
-        struct mp_zimg_repack *dst = ctx->zimg_dst;
-        zfmt->active_region.width = dst->real_w * (double)fmt.w / dst->fmt.w;
-        zfmt->active_region.height = dst->real_h * (double)fmt.h / dst->fmt.h;
+    zfmt->width = r->real_w = MP_ALIGN_UP(fmt.w, 1 << desc.chroma_xs);
+    zfmt->height = r->real_h = MP_ALIGN_UP(fmt.h, 1 << desc.chroma_ys);
+    if (st) {
+        if (r->pack) {
+            zfmt->height = r->real_h = st->slice_h =
+                MPMIN(st->slice_y + st->slice_h, r->real_h) - st->slice_y;
 
+            assert(MP_IS_ALIGNED(r->real_h, 1 << desc.chroma_ys));
+        } else {
+            // Relies on st->dst being initialized first.
+            struct mp_zimg_repack *dst = st->dst;
+
+            zfmt->active_region.width = dst->real_w * (double)fmt.w / dst->fmt.w;
+            zfmt->active_region.height = dst->real_h * st->scale_y;
+
+            zfmt->active_region.top = st->slice_y * st->scale_y;
+        }
     }
 
-    zfmt->subsample_w = mp_log2(desc.chroma_w);
-    zfmt->subsample_h = mp_log2(desc.chroma_h);
+    zfmt->subsample_w = desc.chroma_xs;
+    zfmt->subsample_h = desc.chroma_ys;
 
     zfmt->color_family = ZIMG_COLOR_YUV;
     if (desc.num_planes <= 2) {
@@ -804,18 +440,22 @@ static bool setup_format(zimg_image_format *zfmt, struct mp_zimg_repack *r,
             zfmt->transfer_characteristics = ZIMG_TRANSFER_BT709;
     }
 
+    // mpv treats _some_ gray formats as RGB; zimg doesn't like this.
+    if (zfmt->color_family == ZIMG_COLOR_GREY &&
+        zfmt->matrix_coefficients == ZIMG_MATRIX_RGB)
+        zfmt->matrix_coefficients = ZIMG_MATRIX_BT470_BG;
+
     return true;
 }
 
-static bool allocate_buffer(struct mp_zimg_context *ctx,
-                            struct mp_zimg_repack *r)
+static bool allocate_buffer(struct mp_zimg_state *st, struct mp_zimg_repack *r)
 {
     unsigned lines = 0;
     int err;
     if (r->pack) {
-        err = zimg_filter_graph_get_output_buffering(ctx->zimg_graph, &lines);
+        err = zimg_filter_graph_get_output_buffering(st->graph, &lines);
     } else {
-        err = zimg_filter_graph_get_input_buffering(ctx->zimg_graph, &lines);
+        err = zimg_filter_graph_get_input_buffering(st->graph, &lines);
     }
 
     if (err)
@@ -826,49 +466,49 @@ static bool allocate_buffer(struct mp_zimg_context *ctx,
     // Either ZIMG_BUFFER_MAX, or a power-of-2 slice buffer.
     assert(r->zmask[0] == ZIMG_BUFFER_MAX || MP_IS_POWER_OF_2(r->zmask[0] + 1));
 
-    int h = r->zmask[0] == ZIMG_BUFFER_MAX ? r->fmt.h : r->zmask[0] + 1;
-    if (h >= r->fmt.h) {
-        h = r->fmt.h;
+    int h = r->zmask[0] == ZIMG_BUFFER_MAX ? r->real_h : r->zmask[0] + 1;
+    if (h >= r->real_h) {
+        h = r->real_h;
         r->zmask[0] = ZIMG_BUFFER_MAX;
     }
 
-    r->tmp = mp_image_alloc(r->zimgfmt, r->fmt.w, h);
+    r->tmp = mp_image_alloc(r->zimgfmt, r->real_w, h);
     talloc_steal(r, r->tmp);
 
-    if (r->tmp) {
-        for (int n = 1; n < r->tmp->fmt.num_planes; n++) {
-            r->zmask[n] = r->zmask[0];
-            if (r->zmask[0] != ZIMG_BUFFER_MAX)
-                r->zmask[n] = r->zmask[n] >> r->tmp->fmt.ys[n];
-        }
+    if (!r->tmp)
+        return false;
+
+    // Note: although zimg doesn't require that the chroma plane's zmask is
+    //       divided by the full size zmask, the repack callback requires it,
+    //       since mp_repack can handle only proper slices.
+    for (int n = 1; n < r->tmp->fmt.num_planes; n++) {
+        r->zmask[n] = r->zmask[0];
+        if (r->zmask[0] != ZIMG_BUFFER_MAX)
+            r->zmask[n] = r->zmask[n] >> r->tmp->fmt.ys[n];
     }
 
-    return !!r->tmp;
+    return true;
 }
 
-bool mp_zimg_config(struct mp_zimg_context *ctx)
+static bool mp_zimg_state_init(struct mp_zimg_context *ctx,
+                               struct mp_zimg_state *st,
+                               int slice_y, int slice_h)
 {
     struct zimg_opts *opts = &ctx->opts;
 
-    destroy_zimg(ctx);
+    st->src = talloc_zero(NULL, struct mp_zimg_repack);
+    st->dst = talloc_zero(NULL, struct mp_zimg_repack);
 
-    if (ctx->opts_cache)
-        mp_zimg_update_from_cmdline(ctx);
-
-    ctx->zimg_src = talloc_zero(NULL, struct mp_zimg_repack);
-    ctx->zimg_src->pack = false;
-    ctx->zimg_src->fmt = ctx->src;
-
-    ctx->zimg_dst = talloc_zero(NULL, struct mp_zimg_repack);
-    ctx->zimg_dst->pack = true;
-    ctx->zimg_dst->fmt = ctx->dst;
+    st->scale_y = ctx->src.h / (double)ctx->dst.h;
+    st->slice_y = slice_y;
+    st->slice_h = slice_h;
 
     zimg_image_format src_fmt, dst_fmt;
 
-    // Note: do zimg_dst first, because zimg_src uses fields from zimg_dst.
-    if (!setup_format(&dst_fmt, ctx->zimg_dst, ctx) ||
-        !setup_format(&src_fmt, ctx->zimg_src, ctx))
-        goto fail;
+    // Note: do dst first, because src uses fields from dst.
+    if (!setup_format(&dst_fmt, st->dst, true, &ctx->dst, ctx, st) ||
+        !setup_format(&src_fmt, st->src, false, &ctx->src, ctx, st))
+        return false;
 
     zimg_graph_builder_params params;
     zimg_graph_builder_params_default(&params, ZIMG_API_VERSION);
@@ -891,26 +531,75 @@ bool mp_zimg_config(struct mp_zimg_context *ctx)
     if (ctx->src.color.sig_peak > 0)
         params.nominal_peak_luminance = ctx->src.color.sig_peak;
 
-    ctx->zimg_graph = zimg_filter_graph_build(&src_fmt, &dst_fmt, &params);
-    if (!ctx->zimg_graph) {
+    st->graph = zimg_filter_graph_build(&src_fmt, &dst_fmt, &params);
+    if (!st->graph) {
         char err[128] = {0};
         zimg_get_last_error(err, sizeof(err) - 1);
         MP_ERR(ctx, "zimg_filter_graph_build: %s \n", err);
-        goto fail;
+        return false;
     }
 
     size_t tmp_size;
-    if (!zimg_filter_graph_get_tmp_size(ctx->zimg_graph, &tmp_size)) {
-        tmp_size = MP_ALIGN_UP(tmp_size, ZIMG_ALIGN);
-        ctx->zimg_tmp = aligned_alloc(ZIMG_ALIGN, tmp_size);
+    if (!zimg_filter_graph_get_tmp_size(st->graph, &tmp_size)) {
+        tmp_size = MP_ALIGN_UP(tmp_size, ZIMG_ALIGN) + ZIMG_ALIGN;
+        st->tmp_alloc = ta_alloc_size(NULL, tmp_size);
+        if (st->tmp_alloc)
+            st->tmp = (void *)MP_ALIGN_UP((uintptr_t)st->tmp_alloc, ZIMG_ALIGN);
     }
 
-    if (!ctx->zimg_tmp)
-        goto fail;
+    if (!st->tmp_alloc)
+        return false;
 
-    if (!allocate_buffer(ctx, ctx->zimg_src) ||
-        !allocate_buffer(ctx, ctx->zimg_dst))
+    if (!allocate_buffer(st, st->src) || !allocate_buffer(st, st->dst))
+        return false;
+
+    return true;
+}
+
+bool mp_zimg_config(struct mp_zimg_context *ctx)
+{
+    destroy_zimg(ctx);
+
+    if (ctx->opts_cache)
+        mp_zimg_update_from_cmdline(ctx);
+
+    int slices = ctx->opts.threads;
+    if (slices < 1)
+        slices = av_cpu_count();
+    slices = MPCLAMP(slices, 1, 64);
+
+    struct mp_imgfmt_desc dstfmt = mp_imgfmt_get_desc(ctx->dst.imgfmt);
+    if (!dstfmt.align_y)
         goto fail;
+    int full_h = MP_ALIGN_UP(ctx->dst.h, dstfmt.align_y);
+    int slice_h = (full_h + slices - 1) / slices;
+    slice_h = MP_ALIGN_UP(slice_h, dstfmt.align_y);
+    slice_h = MP_ALIGN_UP(slice_h, 64); // for dithering and minimum slice size
+    slices = (full_h + slice_h - 1) / slice_h;
+
+    int threads = slices - 1;
+    if (threads != ctx->current_thread_count) {
+        // Just destroy and recreate all - dumb and costly, but rarely happens.
+        TA_FREEP(&ctx->tp);
+        ctx->current_thread_count = 0;
+        if (threads) {
+            MP_VERBOSE(ctx, "using %d threads for scaling\n", threads);
+            ctx->tp = mp_thread_pool_create(NULL, threads, threads, threads);
+            if (!ctx->tp)
+                goto fail;
+            ctx->current_thread_count = threads;
+        }
+    }
+
+    for (int n = 0; n < slices; n++) {
+        struct mp_zimg_state *st = talloc_zero(NULL, struct mp_zimg_state);
+        MP_TARRAY_APPEND(ctx, ctx->states, ctx->num_states, st);
+
+        if (!mp_zimg_state_init(ctx, st, n * slice_h, slice_h))
+            goto fail;
+    }
+
+    assert(ctx->num_states == slices);
 
     return true;
 
@@ -921,12 +610,44 @@ fail:
 
 bool mp_zimg_config_image_params(struct mp_zimg_context *ctx)
 {
-    if (ctx->zimg_src && mp_image_params_equal(&ctx->src, &ctx->zimg_src->fmt) &&
-        ctx->zimg_dst && mp_image_params_equal(&ctx->dst, &ctx->zimg_dst->fmt) &&
-        (!ctx->opts_cache || !m_config_cache_update(ctx->opts_cache)) &&
-        ctx->zimg_graph)
-        return true;
+    if (ctx->num_states) {
+        // All states are the same, so checking only one of them is sufficient.
+        struct mp_zimg_state *st = ctx->states[0];
+        if (st->src && mp_image_params_equal(&ctx->src, &st->src->fmt) &&
+            st->dst && mp_image_params_equal(&ctx->dst, &st->dst->fmt) &&
+            (!ctx->opts_cache || !m_config_cache_update(ctx->opts_cache)) &&
+            st->graph)
+            return true;
+    }
     return mp_zimg_config(ctx);
+}
+
+static void do_convert(struct mp_zimg_state *st)
+{
+    assert(st->graph);
+
+    // An annoyance.
+    zimg_image_buffer *zsrc = &st->src->zbuf;
+    zimg_image_buffer_const zsrc_c = {ZIMG_API_VERSION};
+    for (int n = 0; n < MP_ARRAY_SIZE(zsrc_c.plane); n++) {
+        zsrc_c.plane[n].data = zsrc->plane[n].data;
+        zsrc_c.plane[n].stride = zsrc->plane[n].stride;
+        zsrc_c.plane[n].mask = zsrc->plane[n].mask;
+    }
+
+    // (The API promises to succeed if no user callbacks fail, so no need
+    // to check the return value.)
+    zimg_filter_graph_process(st->graph, &zsrc_c, &st->dst->zbuf, st->tmp,
+                              repack_entrypoint, st->src,
+                              repack_entrypoint, st->dst);
+}
+
+static void do_convert_thread(void *ptr)
+{
+    struct mp_zimg_state *st = ptr;
+
+    do_convert(st);
+    mp_waiter_wakeup(&st->thread_waiter, 0);
 }
 
 bool mp_zimg_convert(struct mp_zimg_context *ctx, struct mp_image *dst,
@@ -940,45 +661,42 @@ bool mp_zimg_convert(struct mp_zimg_context *ctx, struct mp_image *dst,
         return false;
     }
 
-    assert(ctx->zimg_graph);
+    for (int n = 0; n < ctx->num_states; n++) {
+        struct mp_zimg_state *st = ctx->states[n];
 
-    zimg_image_buffer zsrc, zdst;
-    zimg_filter_graph_callback cbsrc, cbdst;
-
-    wrap_buffer(ctx->zimg_src, &zsrc, &cbsrc, src);
-    wrap_buffer(ctx->zimg_dst, &zdst, &cbdst, dst);
-
-    // An annoyance.
-    zimg_image_buffer_const zsrc_c = {ZIMG_API_VERSION};
-    for (int n = 0; n < MP_ARRAY_SIZE(zsrc_c.plane); n++) {
-        zsrc_c.plane[n].data = zsrc.plane[n].data;
-        zsrc_c.plane[n].stride = zsrc.plane[n].stride;
-        zsrc_c.plane[n].mask = zsrc.plane[n].mask;
+        if (!wrap_buffer(st, st->src, src) || !wrap_buffer(st, st->dst, dst)) {
+            MP_ERR(ctx, "zimg repacker initialization failed.\n");
+            return false;
+        }
     }
 
-    // (The API promises to succeed if no user callbacks fail, so no need
-    // to check the return value.)
-    zimg_filter_graph_process(ctx->zimg_graph, &zsrc_c, &zdst,
-                              ctx->zimg_tmp,
-                              cbsrc, ctx->zimg_src,
-                              cbdst, ctx->zimg_dst);
+    for (int n = 1; n < ctx->num_states; n++) {
+        struct mp_zimg_state *st = ctx->states[n];
 
-    ctx->zimg_src->mpi = NULL;
-    ctx->zimg_dst->mpi = NULL;
+        st->thread_waiter = (struct mp_waiter)MP_WAITER_INITIALIZER;
+
+        bool r = mp_thread_pool_run(ctx->tp, do_convert_thread, st);
+        // This is guaranteed by the API; and unrolling would be inconvenient.
+        assert(r);
+    }
+
+    do_convert(ctx->states[0]);
+
+    for (int n = 1; n < ctx->num_states; n++) {
+        struct mp_zimg_state *st = ctx->states[n];
+
+        mp_waiter_wait(&st->thread_waiter);
+    }
 
     return true;
 }
 
 static bool supports_format(int imgfmt, bool out)
 {
-    struct mp_zimg_repack t = {
-        .pack = out,
-        .fmt = {
-            .imgfmt = imgfmt,
-        },
-    };
-    zimg_image_format fmt;
-    return setup_format(&fmt, &t, NULL);
+    struct mp_image_params fmt = {.imgfmt = imgfmt};
+    struct mp_zimg_repack t;
+    zimg_image_format zfmt;
+    return setup_format(&zfmt, &t, out, &fmt, NULL, NULL);
 }
 
 bool mp_zimg_supports_in_format(int imgfmt)

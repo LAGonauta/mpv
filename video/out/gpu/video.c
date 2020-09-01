@@ -29,6 +29,7 @@
 
 #include "misc/bstr.h"
 #include "options/m_config.h"
+#include "options/path.h"
 #include "common/global.h"
 #include "options/options.h"
 #include "utils.h"
@@ -321,7 +322,7 @@ static const struct gl_video_opts gl_video_opts_def = {
     .background = {0, 0, 0, 255},
     .gamma = 1.0f,
     .tone_map = {
-        .curve = TONE_MAPPING_HABLE,
+        .curve = TONE_MAPPING_BT_2390,
         .curve_param = NAN,
         .max_boost = 1.0,
         .decay_rate = 100.0,
@@ -329,6 +330,7 @@ static const struct gl_video_opts gl_video_opts_def = {
         .scene_threshold_high = 10.0,
         .desat = 0.75,
         .desat_exp = 1.5,
+        .gamut_clipping = 1,
     },
     .early_flush = -1,
     .hwdec_interop = "auto",
@@ -381,7 +383,8 @@ const struct m_sub_options gl_video_conf = {
             {"reinhard", TONE_MAPPING_REINHARD},
             {"hable",    TONE_MAPPING_HABLE},
             {"gamma",    TONE_MAPPING_GAMMA},
-            {"linear",   TONE_MAPPING_LINEAR})},
+            {"linear",   TONE_MAPPING_LINEAR},
+            {"bt.2390",  TONE_MAPPING_BT_2390})},
         {"hdr-compute-peak", OPT_CHOICE(tone_map.compute_peak,
             {"auto", 0},
             {"yes", 1},
@@ -399,6 +402,7 @@ const struct m_sub_options gl_video_conf = {
         {"tone-mapping-desaturate-exponent", OPT_FLOAT(tone_map.desat_exp),
             M_RANGE(0.0, 20.0)},
         {"gamut-warning", OPT_FLAG(tone_map.gamut_warning)},
+        {"gamut-clipping", OPT_FLAG(tone_map.gamut_clipping)},
         {"opengl-pbo", OPT_FLAG(pbo)},
         SCALER_OPTS("scale",  SCALER_SCALE),
         SCALER_OPTS("dscale", SCALER_DSCALE),
@@ -493,7 +497,9 @@ static struct bstr load_cached_file(struct gl_video *p, const char *path)
             return p->files[n].body;
     }
     // not found -> load it
-    struct bstr s = stream_read_file(path, p, p->global, 1000000000); // 1GB
+    char *fname = mp_get_user_path(NULL, p->global, path);
+    struct bstr s = stream_read_file(fname, p, p->global, 1000000000); // 1GB
+    talloc_free(fname);
     if (s.len) {
         struct cached_file new = {
             .path = talloc_strdup(p, path),
@@ -790,6 +796,8 @@ static void pass_get_images(struct gl_video *p, struct video_image *vimg,
         int csp = type == PLANE_ALPHA ? MP_CSP_RGB : p->image_params.color.space;
         float tex_mul =
             1.0 / mp_get_csp_mul(csp, msb_valid_bits, p->ra_format.component_bits);
+        if (p->ra_format.component_type == RA_CTYPE_FLOAT)
+            tex_mul = 1.0;
 
         img[n] = (struct image){
             .type = type,
@@ -2296,6 +2304,7 @@ static void pass_convert_yuv(struct gl_video *p)
 
     struct mp_csp_params cparams = MP_CSP_PARAMS_DEFAULTS;
     cparams.gray = p->is_gray;
+    cparams.is_float = p->ra_format.component_type == RA_CTYPE_FLOAT;
     mp_csp_set_image_params(&cparams, &p->image_params);
     mp_csp_equalizer_state_get(p->video_eq, &cparams);
     p->user_gamma = 1.0 / (cparams.gamma * p->opts.gamma);
@@ -2357,9 +2366,11 @@ static void pass_convert_yuv(struct gl_video *p)
     p->components = 3;
     if (!p->has_alpha || p->opts.alpha_mode == ALPHA_NO) {
         GLSL(color.a = 1.0;)
-    } else { // alpha present in image
+    } else if (p->image_params.alpha == MP_ALPHA_PREMUL) {
         p->components = 4;
-        GLSL(color = vec4(color.rgb * color.a, color.a);)
+    } else {
+        p->components = 4;
+        GLSL(color = vec4(color.rgb * color.a, color.a);) // straight -> premul
     }
 }
 
@@ -3284,9 +3295,9 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
                 // For the non-interpolation case, we draw to a single "cache"
                 // texture to speed up subsequent re-draws (if any exist)
                 struct ra_fbo dest_fbo = fbo;
-                if (frame->num_vsyncs > 1 && frame->display_synced &&
-                    !p->dumb_mode && (p->ra->caps & RA_CAP_BLIT) &&
-                    fbo.tex->params.blit_dst)
+                bool repeats = frame->num_vsyncs > 1 && frame->display_synced;
+                if ((repeats || frame->still) && !p->dumb_mode &&
+                    (p->ra->caps & RA_CAP_BLIT) && fbo.tex->params.blit_dst)
                 {
                     // Attempt to use the same format as the destination FBO
                     // if possible. Some RAs use a wrapped dummy format here,
@@ -3294,8 +3305,7 @@ void gl_video_render_frame(struct gl_video *p, struct vo_frame *frame,
                     const struct ra_format *fmt = fbo.tex->params.format;
                     if (fmt->dummy_format)
                         fmt = p->fbo_format;
-                    if (!fmt->storable && p->fbo_format->storable)
-                        fmt = p->fbo_format; // to be on the safe side
+
                     bool r = ra_tex_resize(p->ra, p->log, &p->output_tex,
                                            fbo.tex->params.w, fbo.tex->params.h,
                                            fmt);
@@ -3451,6 +3461,7 @@ done:
     talloc_free(nframe);
     ra_tex_free(p->ra, &target);
     gl_video_resize(p, &old_src, &old_dst, &old_osd);
+    gl_video_reset_surfaces(p);
     if (!ok)
         TA_FREEP(&res);
     args->res = res;
@@ -4074,6 +4085,8 @@ static int validate_scaler_opt(struct mp_log *log, const m_option_t *opt,
     bool tscale = bstr_equals0(name, "tscale");
     if (bstr_equals0(param, "help")) {
         r = M_OPT_EXIT;
+    } else if (bstr_equals0(name, "dscale") && !param.len) {
+        return r; // empty dscale means "use same as upscaler"
     } else {
         snprintf(s, sizeof(s), "%.*s", BSTR_P(param));
         if (!handle_scaler_opt(s, tscale))
@@ -4103,6 +4116,8 @@ static int validate_window_opt(struct mp_log *log, const m_option_t *opt,
     int r = 1;
     if (bstr_equals0(param, "help")) {
         r = M_OPT_EXIT;
+    } else if (!param.len) {
+        return r; // empty string means "use preferred window"
     } else {
         snprintf(s, sizeof(s), "%.*s", BSTR_P(param));
         const struct filter_window *window = mp_find_filter_window(s);

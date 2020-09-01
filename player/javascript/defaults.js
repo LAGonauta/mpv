@@ -126,10 +126,17 @@ function dispatch_message(ev) {
 var hooks = [];  // array of callbacks, id is index+1
 
 function run_hook(ev) {
+    var state = 0;  // 0:initial, 1:deferred, 2:continued
+    function do_cont() { return state = 2, mp._hook_continue(ev.hook_id) }
+
+    function err() { return mp.msg.error("hook already continued"), undefined }
+    function usr_defer() { return state == 2 ? err() : (state = 1, true) }
+    function usr_cont()  { return state == 2 ? err() : do_cont() }
+
     var cb = ev.id > 0 && hooks[ev.id - 1];
     if (cb)
-        cb();
-    mp._hook_continue(ev.hook_id);
+        cb({ defer: usr_defer, cont: usr_cont });
+    return state == 0 ? do_cont() : true;
 }
 
 mp.add_hook = function add_hook(name, pri, fn) {
@@ -233,6 +240,11 @@ mp.create_osd_overlay = function create_osd_overlay(format) {
 mp.set_osd_ass = function set_osd_ass(res_x, res_y, data) {
     if (!mp._legacy_overlay)
         mp._legacy_overlay = mp.create_osd_overlay("ass-events");
+
+    var lo = mp._legacy_overlay;
+    if (lo.res_x == res_x && lo.res_y == res_y && lo.data == data)
+        return true;
+
     mp._legacy_overlay.res_x = res_x;
     mp._legacy_overlay.res_y = res_y;
     mp._legacy_overlay.data = data;

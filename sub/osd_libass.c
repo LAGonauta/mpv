@@ -31,7 +31,7 @@
 #include "osd_state.h"
 
 static const char osd_font_pfb[] =
-#include "sub/osd_font.h"
+#include "generated/sub/osd_font.otf.inc"
 ;
 
 #include "sub/ass_mp.h"
@@ -63,7 +63,7 @@ static void create_ass_renderer(struct osd_state *osd, struct ass_state *ass)
 
     mp_ass_configure_fonts(ass->render, osd->opts->osd_style,
                            osd->global, ass->log);
-    ass_set_aspect_ratio(ass->render, 1.0, 1.0);
+    ass_set_pixel_aspect(ass->render, 1.0);
 }
 
 static void destroy_ass_renderer(struct ass_state *ass)
@@ -132,6 +132,7 @@ static void create_ass_track(struct osd_state *osd, struct osd_object *obj,
     track->Timer = 100.;
     track->WrapStyle = 1; // end-of-line wrapping instead of smart wrapping
     track->Kerning = true;
+    track->ScaledBorderAndShadow = true;
 
     update_playres(ass, &obj->vo_res);
 }
@@ -621,7 +622,7 @@ static void append_ass(struct ass_state *ass, struct mp_osd_res *res,
     update_playres(ass, res);
 
     ass_set_frame_size(ass->render, res->w, res->h);
-    ass_set_aspect_ratio(ass->render, res->display_par, 1.0);
+    ass_set_pixel_aspect(ass->render, res->display_par);
 
     int ass_changed;
     *img_list = ass_render_frame(ass->render, ass->track, 0, &ass_changed);
@@ -634,8 +635,8 @@ static void append_ass(struct ass_state *ass, struct mp_osd_res *res,
     }
 }
 
-void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
-                            int format, struct sub_bitmaps *out_imgs)
+struct sub_bitmaps *osd_object_get_bitmaps(struct osd_state *osd,
+                                           struct osd_object *obj, int format)
 {
     if (obj->type == OSDTYPE_OSD && obj->osd_changed)
         update_osd(osd, obj);
@@ -656,8 +657,11 @@ void osd_object_get_bitmaps(struct osd_state *osd, struct osd_object *obj,
         }
     }
 
+    struct sub_bitmaps out_imgs = {0};
     mp_ass_packer_pack(obj->ass_packer, obj->ass_imgs, obj->num_externals + 1,
-                       obj->changed, format, out_imgs);
+                       obj->changed, format, &out_imgs);
 
     obj->changed = false;
+
+    return sub_bitmaps_copy(&obj->copy_cache, &out_imgs);
 }

@@ -262,6 +262,8 @@ void mp_load_builtin_scripts(struct MPContext *mpctx)
     load_builtin_script(mpctx, 1, mpctx->opts->lua_load_ytdl, "@ytdl_hook.lua");
     load_builtin_script(mpctx, 2, mpctx->opts->lua_load_stats, "@stats.lua");
     load_builtin_script(mpctx, 3, mpctx->opts->lua_load_console, "@console.lua");
+    load_builtin_script(mpctx, 4, mpctx->opts->lua_load_auto_profiles,
+                        "@auto_profiles.lua");
 }
 
 bool mp_load_scripts(struct MPContext *mpctx)
@@ -333,10 +335,8 @@ static int load_run(struct mp_script_args *args)
         return -1;
     args->client = NULL; // ownership lost
 
-    // Hardcode them (according to opts.fds[]), because we want to allow clients
-    // to hardcode them if they want. Sue me.
-    char *fdopt = fds[1] >= 0 ? "--mpv-ipc-fd=3:4"
-                              : "--mpv-ipc-fd=3";
+    char *fdopt = fds[1] >= 0 ? mp_tprintf(80, "--mpv-ipc-fd=%d:%d", fds[0], fds[1])
+                              : mp_tprintf(80, "--mpv-ipc-fd=%d", fds[0]);
 
     struct mp_subprocess_opts opts = {
         .exe = (char *)args->filename,
@@ -346,12 +346,12 @@ static int load_run(struct mp_script_args *args)
             {.fd = 0, .src_fd = 0,},
             {.fd = 1, .src_fd = 1,},
             {.fd = 2, .src_fd = 2,},
-            // Just hope these don't step over each other (e.g. fds[1] is not
+            // Just hope these don't step over each other (e.g. fds[1] could be
             // below 4, if the std FDs are missing).
-            {.fd = 3, .src_fd = fds[0], },
-            {.fd = 4, .src_fd = fds[1], },
+            {.fd = fds[0], .src_fd = fds[0], },
+            {.fd = fds[1], .src_fd = fds[1], },
         },
-        .num_fds = fds[1] >= 0 ? 4 : 5,
+        .num_fds = fds[1] >= 0 ? 5 : 4,
         .detach = true,
     };
     struct mp_subprocess_result res;

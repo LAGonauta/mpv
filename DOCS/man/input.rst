@@ -210,11 +210,10 @@ This applies to certain APIs, such as ``mp.command_native()`` (with tables that
 have string keys) in Lua scripting, or ``mpv_command_node()`` (with
 MPV_FORMAT_NODE_MAP) in the C libmpv client API.
 
-Like with array commands, quoting and escaping is inherently not needed in the
-normal case.
-
-The name of each command is defined in each command description in the
-`List of Input Commands`_. ``--input-cmdlist`` also lists them.
+The name of the command is provided with a ``name`` string field. The name of
+each command is defined in each command description in the
+`List of Input Commands`_. ``--input-cmdlist`` also lists them. See the
+``subprocess`` command for an example.
 
 Some commands do not support named arguments (e.g. ``run`` command). You need
 to use APIs that pass arguments as arrays.
@@ -277,6 +276,12 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         Mark the current time position. The next normal ``revert-seek`` command
         will seek back to this point, no matter how many seeks happened since
         last time.
+    mark-permanent
+        If set, mark the current position, and do not change the mark position
+        before the next ``revert-seek`` command that has ``mark`` or
+        ``mark-permanent`` set (or playback of the current file ends). Until
+        this happens, ``revert-seek`` will always seek to the marked point. This
+        flag cannot be combined with ``mark``.
 
     Using it without any arguments gives you the default behavior.
 
@@ -523,12 +528,42 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
     ``capture_stderr`` (``MPV_FORMAT_FLAG``)
         Same as ``capture_stdout``, but for stderr.
 
+    ``detach`` (``MPV_FORMAT_FLAG``)
+        Whether to run the process in detached mode (optional, default: no). In
+        this mode, the process is run in a new process session, and the command
+        does not wait for the process to terminate. If neither
+        ``capture_stdout`` nor ``capture_stderr`` have been set to ``yes``,
+        the command returns immediately after the new process has been started,
+        otherwise the command will read as long as the pipes are open.
+
+    ``env`` (``MPV_FORMAT_NODE_ARRAY[MPV_FORMAT_STRING]``)
+        Set a list of environment variables for the new process (default: empty).
+        If an empty list is passed, the environment of the mpv process is used
+        instead. (Unlike the underlying OS mechanisms, the mpv command cannot
+        start a process with empty environment. Fortunately, that is completely
+        useless.) The format of the list is as in the ``execle()`` syscall. Each
+        string item defines an environment variable as in ``NANME=VALUE``.
+
+        On Lua, you may use ``utils.get_env_list()`` to retrieve the current
+        environment if you e.g. simply want to add a new variable.
+
+    ``stdin_data`` (``MPV_FORMAT_STRING``)
+        Feed the given string to the new process' stdin. Since this is a string,
+        you cannot pass arbitrary binary data. If the process terminates or
+        closes the pipe before all data is written, the remaining data is
+        silently discarded. Probably does not work on win32.
+
+    ``passthrough_stdin`` (``MPV_FORMAT_FLAG``)
+        If enabled, wire the new process' stdin to mpv's stdin (default: no).
+        Before mpv 0.33.0, this argument did not exist, but the default was if
+        it was set to ``yes``.
+
     The command returns the following result (as ``MPV_FORMAT_NODE_MAP``):
 
     ``status`` (``MPV_FORMAT_INT64``)
         The raw exit status of the process. It will be negative on error. The
         meaning of negative values is undefined, other than meaning error (and
-        does not necessarily correspond to OS low level exit status values).
+        does not correspond to OS low level exit status values).
 
         On Windows, it can happen that a negative return value is returned
         even if the process exits gracefully, because the win32 ``UINT`` exit
@@ -571,6 +606,23 @@ Remember to quote string arguments in input.conf (see `Flat command syntax`_).
         Don't forget to set the ``playback_only`` field if you want the command
         run while the player is in idle mode, or if you don't want that end of
         playback kills the command.
+
+    .. admonition:: Example
+
+        ::
+
+            local r = mp.command_native({
+                name = "subprocess",
+                playback_only = false,
+                capture_stdout = true,
+                args = {"cat", "/proc/cpuinfo"},
+            })
+            if r.status == 0 then
+                print("result: " .. r.stdout)
+            end
+
+        This is a fairly useless Lua example, which demonstrates how to run
+        a process in a blocking manner, and retrieving its stdout output.
 
 ``quit [<code>]``
     Exit the player. If an argument is given, it's used as process exit code.
@@ -788,12 +840,15 @@ Input Commands that are Possibly Subject to Change
         without filter name and parameters as filter entry. This toggles the
         enable/disable flag.
 
+    <remove>
+        Like ``toggle``, but always remove the given filter from the chain.
+
     <del>
         Remove the given filters from the video chain. Unlike in the other
         cases, the second parameter is a comma separated list of filter names
         or integer indexes. ``0`` would denote the first filter. Negative
         indexes start from the last filter, and ``-1`` denotes the last
-        filter. Deprecated.
+        filter. Deprecated, use ``remove``.
 
     <clr>
         Remove all filters. Note that like the other sub-commands, this does
@@ -1176,13 +1231,21 @@ Input Commands that are Possibly Subject to Change
 ``af-command <label> <command> <argument>``
     Same as ``vf-command``, but for audio filters.
 
-``apply-profile <name>``
+``apply-profile <name> [<mode>]``
     Apply the contents of a named profile. This is like using ``profile=name``
     in a config file, except you can map it to a key binding to change it at
     runtime.
 
-    There is no such thing as "unapplying" a profile - applying a profile
-    merely sets all option values listed within the profile.
+    The mode argument:
+
+    ``default``
+        Apply the profile. Default if the argument is omitted.
+
+    ``restore``
+        Restore options set by a previous ``apply-profile`` command for this
+        profile. Only works if the profile has ``profile-restore`` set to a
+        relevant mode. Prints a warning if nothing could be done. See
+        `Runtime profiles`_ for details.
 
 ``load-script <filename>``
     Load a script, similar to the ``--script`` option. Whether this waits for
@@ -1674,9 +1737,10 @@ Property list
 .. note::
 
     Most options can be set as runtime via properties as well. Just remove the
-    leading ``--`` from the option name. These are not documented. Only
-    properties which do not exist as option with the same name, or which have
-    very different behavior from the options are documented below.
+    leading ``--`` from the option name. These are not documented below, see
+    `OPTIONS`_ instead. Only properties which do not exist as option with the
+    same name, or which have very different behavior from the options are
+    documented below.
 
 ``audio-speed-correction``, ``video-speed-correction``
     Factor multiplied with ``speed`` at which the player attempts to play the
@@ -1725,9 +1789,9 @@ Property list
     property.
 
 ``stream-open-filename``
-    The full path to the currently played media. This is different only from
-    ``path`` in special cases. In particular, if ``--ytdl=yes`` is used, and
-    the URL is detected by ``youtube-dl``, then the script will set this
+    The full path to the currently played media. This is different from
+    ``path`` only in special cases. In particular, if ``--ytdl=yes`` is used,
+    and the URL is detected by ``youtube-dl``, then the script will set this
     property to the actual media URL. This property should be set only during
     the ``on_load`` or ``on_load_fail`` hooks, otherwise it will have no effect
     (or may do something implementation defined in the future). The property is
@@ -1988,6 +2052,8 @@ Property list
     This gives the number bytes per seconds over a 1 second window (using
     the type ``MPV_FORMAT_INT64`` for the client API).
 
+    This is the same as ``demuxer-cache-state/raw-input-rate``.
+
 ``demuxer-cache-duration``
     Approximate duration of video buffered in the demuxer, in seconds. The
     guess is very unreliable, and often the property will not be available
@@ -2035,6 +2101,10 @@ Property list
 
     ``cache-duration`` is ``demuxer-cache-duration``. Missing if unavailable.
 
+    ``raw-input-rate`` is the estimated input rate of the network layer (or any
+    other byte-oriented input layer) in bytes per second. May be inaccurate or
+    missing.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -2051,6 +2121,7 @@ Property list
             "fw-bytes"          MPV_FORMAT_INT64
             "file-cache-bytes"  MPV_FORMAT_INT64
             "cache-duration"    MPV_FORMAT_DOUBLE
+            "raw-input-rate"    MPV_FORMAT_INT64
 
     Other fields (might be changed or removed in the future):
 
@@ -2229,11 +2300,6 @@ Property list
         different resolution, which is the reason this value can sometimes be
         odd or confusing. Can be unavailable with some formats.
 
-    ``video-params/plane-depth``
-        Bit depth for each color component as integer. This is only exposed
-        for planar or single-component formats, and is unavailable for other
-        formats.
-
     ``video-params/w``, ``video-params/h``
         Video size as integers, with no aspect correction applied.
 
@@ -2274,6 +2340,11 @@ Property list
         Source file stereo 3D mode. (See the ``format`` video filter's
         ``stereo-in`` option.)
 
+    ``video-params/alpha``
+        Alpha type. If the format has no alpha channel, this will be unavailable
+        (but in future releases, it could change to ``no``). If alpha is
+        present, this is set to ``straight`` or ``premul``.
+
     When querying the property with the client API using ``MPV_FORMAT_NODE``,
     or with Lua ``mp.get_property_native``, this will return a mpv_node with
     the following contents:
@@ -2297,6 +2368,8 @@ Property list
             "chroma-location"   MPV_FORMAT_STRING
             "rotate"            MPV_FORMAT_INT64
             "stereo-in"         MPV_FORMAT_STRING
+            "average-bpp"       MPV_FORMAT_INT64
+            "alpha"             MPV_FORMAT_STRING
 
 ``dwidth``, ``dheight``
     Video display size. This is the video size after filters and aspect scaling
@@ -2451,6 +2524,19 @@ Property list
     Return the current subtitle text regardless of sub visibility.
     Formatting is stripped. If the subtitle is not text-based
     (i.e. DVD/BD subtitles), an empty string is returned.
+
+    This property is experimental and might be removed in the future.
+
+``sub-text-ass``
+    Like ``sub-text``, but return the text in ASS format. Text subtitles in
+    other formats are converted. For native ASS subtitles, events that do
+    not contain any text (but vector drawings etc.) are not filtered out. If
+    multiple events match with the current playback time, they are concatenated
+    with line breaks. Contains only the "Text" part of the events.
+
+    This property is not enough to render ASS subtitles correctly, because ASS
+    header and per-event metadata are not returned. You likely need to do
+    further filtering on the returned string to make it useful.
 
     This property is experimental and might be removed in the future.
 
@@ -2713,6 +2799,26 @@ Property list
                 "replaygain-album-peak" MPV_FORMAT_DOUBLE
                 "replaygain-album-gain" MPV_FORMAT_DOUBLE
 
+``current-tracks/...``
+    This gives access to currently selected tracks. It redirects to the correct
+    entry in ``track-list``.
+
+    The following sub-entries are defined: ``video``, ``audio``, ``sub``,
+    ``sub2``
+
+    For example, ``current-tracks/audio/lang`` returns the current audio track's
+    language field (the same value as ``track-list/N/lang``).
+
+    A sub-entry is accessible only if a track of that type is actually selected.
+    Tracks selected via ``--lavfi-complex`` never appear under this property.
+    ``current-tracks`` and ``current-tracks/`` are currently not accessible, and
+    will not return anything.
+
+    Scripts etc. should not use this. They should use ``track-list``, loop over
+    all tracks, and inspect the ``selected`` field to test whether a track is
+    selected (or compare the ``id`` field to the ``video`` / ``audio`` etc.
+    options).
+
 ``chapter-list``
     List of chapters, current entry marked. Currently, the raw property value
     is useless.
@@ -2868,6 +2974,15 @@ Property list
     Note that directly accessing this structure via subkeys is not supported,
     the only access is through aforementioned ``MPV_FORMAT_NODE``.
 
+``perf-info``
+    Further performance data. Querying this property triggers internal
+    collection of some data, and may slow down the player. Each query will reset
+    some internal state. Property change notification doesn't and won't work.
+    All of this may change in the future, so don't use this. The builtin
+    ``stats`` script is supposed to be the only user; since it's bundled and
+    built with the source code, it can use knowledge of mpv internal to render
+    the information properly. See ``stats`` script description for some details.
+
 ``video-bitrate``, ``audio-bitrate``, ``sub-bitrate``
     Bitrate values calculated on the packet level. This works by dividing the
     bit size of all packets between two keyframes by their presentation
@@ -3016,6 +3131,9 @@ Property list
 ``demuxer-lavf-list``
     List of available libavformat demuxers' names. This can be used to check
     for support for a specific format or use with ``--demuxer-lavf-format``.
+
+``input-key-list``
+    List of `Key names`_, same as output by ``--input-keylist``.
 
 ``mpv-version``
     Return the mpv version/copyright string. Depending on how the binary was

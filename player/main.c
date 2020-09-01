@@ -43,6 +43,7 @@
 #include "common/common.h"
 #include "common/msg.h"
 #include "common/msg_control.h"
+#include "common/stats.h"
 #include "common/global.h"
 #include "filters/f_decoder_wrapper.h"
 #include "options/parse_configfile.h"
@@ -65,7 +66,7 @@
 #include "screenshot.h"
 
 static const char def_config[] =
-#include "player/builtin_conf.inc"
+#include "generated/etc/builtin.conf.inc"
 ;
 
 #if HAVE_COCOA
@@ -263,7 +264,7 @@ struct MPContext *mp_create(void)
         .last_chapter = -2,
         .term_osd_contents = talloc_strdup(mpctx, ""),
         .osd_progbar = { .type = -1 },
-        .playlist = talloc_struct(mpctx, struct playlist, {0}),
+        .playlist = talloc_zero(mpctx, struct playlist),
         .dispatch = mp_dispatch_create(mpctx),
         .playback_abort = mp_cancel_new(mpctx),
         .thread_pool = mp_thread_pool_create(mpctx, 0, 1, 30),
@@ -275,10 +276,14 @@ struct MPContext *mp_create(void)
 
     mpctx->global = talloc_zero(mpctx, struct mpv_global);
 
+    stats_global_init(mpctx->global);
+
     // Nothing must call mp_msg*() and related before this
     mp_msg_init(mpctx->global);
     mpctx->log = mp_log_new(mpctx, mpctx->global->log, "!cplayer");
     mpctx->statusline = mp_log_new(mpctx, mpctx->log, "!statusline");
+
+    mpctx->stats = stats_ctx_create(mpctx, mpctx->global, "main");
 
     // Create the config context and register the options
     mpctx->mconfig = m_config_new(mpctx, mpctx->log, &mp_opt_root);

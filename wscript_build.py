@@ -54,96 +54,82 @@ def build(ctx):
     ctx(
         features = "file2string",
         source = "TOOLS/osxbundle/mpv.app/Contents/Resources/icon.icns",
-        target = "osdep/macosx_icon.inc",
+        target = "generated/TOOLS/osxbundle/mpv.app/Contents/Resources/icon.icns.inc",
     )
 
-    ctx(
-        features = "file2string",
-        source = "etc/mpv-icon-8bit-16x16.png",
-        target = "video/out/x11_icon_16.inc",
-    )
-
-    ctx(
-        features = "file2string",
-        source = "etc/mpv-icon-8bit-32x32.png",
-        target = "video/out/x11_icon_32.inc",
-    )
-
-    ctx(
-        features = "file2string",
-        source = "etc/mpv-icon-8bit-64x64.png",
-        target = "video/out/x11_icon_64.inc",
-    )
-
-    ctx(
-        features = "file2string",
-        source = "etc/mpv-icon-8bit-128x128.png",
-        target = "video/out/x11_icon_128.inc",
-    )
+    icons = [16, 32, 64, 128]
+    for size in icons:
+        name = "etc/mpv-icon-8bit-%dx%d.png" % (size, size)
+        ctx(
+            features = "file2string",
+            source = name,
+            target = "generated/%s.inc" % name,
+        )
 
     ctx(
         features = "file2string",
         source = "etc/input.conf",
-        target = "input/input_conf.h",
+        target = "generated/etc/input.conf.inc",
     )
 
     ctx(
         features = "file2string",
         source = "etc/builtin.conf",
-        target = "player/builtin_conf.inc",
+        target = "generated/etc/builtin.conf.inc",
     )
 
     ctx(
         features = "file2string",
         source = "sub/osd_font.otf",
-        target = "sub/osd_font.h",
+        target = "generated/sub/osd_font.otf.inc",
     )
 
     lua_files = ["defaults.lua", "assdraw.lua", "options.lua", "osc.lua",
-                 "ytdl_hook.lua", "stats.lua", "console.lua"]
+                 "ytdl_hook.lua", "stats.lua", "console.lua",
+                 "auto_profiles.lua"]
 
     for fn in lua_files:
         fn = "player/lua/" + fn
         ctx(
             features = "file2string",
             source = fn,
-            target = os.path.splitext(fn)[0] + ".inc",
+            target = "generated/%s.inc" % fn,
         )
 
     ctx(
         features = "file2string",
         source = "player/javascript/defaults.js",
-        target = "player/javascript/defaults.js.inc",
+        target = "generated/player/javascript/defaults.js.inc",
     )
 
     if ctx.dependency_satisfied('wayland'):
         ctx.wayland_protocol_code(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "stable/xdg-shell/xdg-shell",
-            target    = "video/out/wayland/xdg-shell.c")
+            target    = "generated/wayland/xdg-shell.c")
         ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "stable/xdg-shell/xdg-shell",
-            target    = "video/out/wayland/xdg-shell.h")
+            target    = "generated/wayland/xdg-shell.h")
         ctx.wayland_protocol_code(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "unstable/idle-inhibit/idle-inhibit-unstable-v1",
-            target    = "video/out/wayland/idle-inhibit-v1.c")
+            target    = "generated/wayland/idle-inhibit-unstable-v1.c")
         ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "unstable/idle-inhibit/idle-inhibit-unstable-v1",
-            target    = "video/out/wayland/idle-inhibit-v1.h")
+            target    = "generated/wayland/idle-inhibit-unstable-v1.h")
         ctx.wayland_protocol_code(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "stable/presentation-time/presentation-time",
-            target    = "video/out/wayland/presentation-time.c")
+            target    = "generated/wayland/presentation-time.c")
         ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "stable/presentation-time/presentation-time",
-            target    = "video/out/wayland/presentation-time.h")
+            target    = "generated/wayland/presentation-time.h")
         ctx.wayland_protocol_code(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "unstable/xdg-decoration/xdg-decoration-unstable-v1",
-            target    = "video/out/wayland/xdg-decoration-v1.c")
+            target    = "generated/wayland/xdg-decoration-unstable-v1.c")
         ctx.wayland_protocol_header(proto_dir = ctx.env.WL_PROTO_DIR,
             protocol  = "unstable/xdg-decoration/xdg-decoration-unstable-v1",
-            target    = "video/out/wayland/xdg-decoration-v1.h")
+            target    = "generated/wayland/xdg-decoration-unstable-v1.h")
 
-    ctx(features = "ebml_header", target = "ebml_types.h")
-    ctx(features = "ebml_definitions", target = "ebml_defs.c")
+    ctx(features = "ebml_header", target = "generated/ebml_types.h")
+    ctx(features = "ebml_definitions", target = "generated/ebml_defs.c")
 
     def swift(task):
         src = [x.abspath() for x in task.inputs]
@@ -167,7 +153,7 @@ def build(ctx):
 
         return task.exec_command(cmd)
 
-    if ctx.dependency_satisfied('macos-cocoa-cb'):
+    if ctx.dependency_satisfied('cocoa') and ctx.dependency_satisfied('swift'):
         swift_source = [
             ( "osdep/macos/log_helper.swift" ),
             ( "osdep/macos/libmpv_helper.swift" ),
@@ -175,11 +161,12 @@ def build(ctx):
             ( "osdep/macos/swift_extensions.swift" ),
             ( "osdep/macos/swift_compat.swift" ),
             ( "osdep/macos/remote_command_center.swift", "macos-media-player" ),
-            ( "video/out/cocoa-cb/events_view.swift" ),
-            ( "video/out/cocoa-cb/video_layer.swift" ),
-            ( "video/out/cocoa-cb/window.swift" ),
-            ( "video/out/cocoa-cb/title_bar.swift" ),
-            ( "video/out/cocoa_cb_common.swift" ),
+            ( "video/out/mac/common.swift" ),
+            ( "video/out/mac/view.swift" ),
+            ( "video/out/mac/window.swift" ),
+            ( "video/out/mac/title_bar.swift" ),
+            ( "video/out/cocoa_cb_common.swift", "macos-cocoa-cb" ),
+            ( "video/out/mac/gl_layer.swift", "macos-cocoa-cb" ),
         ]
 
         ctx(
@@ -222,7 +209,7 @@ def build(ctx):
     ])
 
     subprocess_c = ctx.pick_first_matching_dep([
-        ( "osdep/subprocess-posix.c",            "posix-spawn" ),
+        ( "osdep/subprocess-posix.c",            "posix" ),
         ( "osdep/subprocess-win.c",              "win32-desktop" ),
         ( "osdep/subprocess-dummy.c" ),
     ])
@@ -230,15 +217,17 @@ def build(ctx):
     sources = [
         ## Audio
         ( "audio/aframe.c" ),
-        ( "audio/audio_buffer.c" ),
         ( "audio/chmap.c" ),
         ( "audio/chmap_sel.c" ),
         ( "audio/decode/ad_lavc.c" ),
         ( "audio/decode/ad_spdif.c" ),
+        ( "audio/filter/af_drop.c" ),
         ( "audio/filter/af_format.c" ),
         ( "audio/filter/af_lavcac3enc.c" ),
         ( "audio/filter/af_rubberband.c",        "rubberband" ),
         ( "audio/filter/af_scaletempo.c" ),
+        ( "audio/filter/af_scaletempo2.c" ),
+        ( "audio/filter/af_scaletempo2_internals.c" ),
         ( "audio/fmt-conversion.c" ),
         ( "audio/format.c" ),
         ( "audio/out/ao.c" ),
@@ -262,8 +251,7 @@ def build(ctx):
         ( "audio/out/ao_wasapi.c",               "wasapi" ),
         ( "audio/out/ao_wasapi_changenotify.c",  "wasapi" ),
         ( "audio/out/ao_wasapi_utils.c",         "wasapi" ),
-        ( "audio/out/pull.c" ),
-        ( "audio/out/push.c" ),
+        ( "audio/out/buffer.c" ),
 
         ## Core
         ( "common/av_common.c" ),
@@ -274,6 +262,7 @@ def build(ctx):
         ( "common/msg.c" ),
         ( "common/playlist.c" ),
         ( "common/recorder.c" ),
+        ( "common/stats.c" ),
         ( "common/tags.c" ),
         ( "common/version.c" ),
 
@@ -331,7 +320,6 @@ def build(ctx):
         ( "misc/natural_sort.c" ),
         ( "misc/node.c" ),
         ( "misc/rendezvous.c" ),
-        ( "misc/ring.c" ),
         ( "misc/thread_pool.c" ),
         ( "misc/thread_tools.c" ),
 
@@ -372,6 +360,7 @@ def build(ctx):
         ( "stream/stream_cb.c" ),
         ( "stream/stream_cdda.c",                "cdda" ),
         ( "stream/stream_concat.c" ),
+        ( "stream/stream_slice.c" ),
         ( "stream/stream_dvb.c",                 "dvbin" ),
         ( "stream/stream_dvdnav.c",              "dvdnav" ),
         ( "stream/stream_edl.c" ),
@@ -402,6 +391,7 @@ def build(ctx):
         ( "test/json.c",                         "tests" ),
         ( "test/linked_list.c",                  "tests" ),
         ( "test/paths.c",                        "tests" ),
+        ( "test/repack.c",                       "tests && zimg" ),
         ( "test/scale_sws.c",                    "tests" ),
         ( "test/scale_test.c",                   "tests" ),
         ( "test/scale_zimg.c",                   "tests && zimg" ),
@@ -466,6 +456,7 @@ def build(ctx):
         ( "video/out/hwdec/hwdec_vaapi.c",       "vaapi-egl || vaapi-vulkan" ),
         ( "video/out/hwdec/hwdec_vaapi_gl.c",    "vaapi-egl" ),
         ( "video/out/hwdec/hwdec_vaapi_vk.c",    "vaapi-vulkan" ),
+        ( "video/out/libmpv_sw.c" ),
         ( "video/out/placebo/ra_pl.c",           "libplacebo" ),
         ( "video/out/placebo/utils.c",           "libplacebo" ),
         ( "video/out/opengl/angle_dynamic.c",    "egl-angle" ),
@@ -520,15 +511,16 @@ def build(ctx):
         ( "video/out/vulkan/context_xlib.c",     "vulkan && x11" ),
         ( "video/out/vulkan/utils.c",            "vulkan" ),
         ( "video/out/w32_common.c",              "win32-desktop" ),
-        ( "video/out/wayland/idle-inhibit-v1.c", "wayland" ),
-        ( "video/out/wayland/presentation-time.c", "wayland" ),
-        ( "video/out/wayland/xdg-decoration-v1.c", "wayland" ),
-        ( "video/out/wayland/xdg-shell.c",       "wayland" ),
+        ( "generated/wayland/idle-inhibit-unstable-v1.c", "wayland" ),
+        ( "generated/wayland/presentation-time.c", "wayland" ),
+        ( "generated/wayland/xdg-decoration-unstable-v1.c", "wayland" ),
+        ( "generated/wayland/xdg-shell.c",       "wayland" ),
         ( "video/out/wayland_common.c",          "wayland" ),
         ( "video/out/win32/displayconfig.c",     "win32-desktop" ),
         ( "video/out/win32/droptarget.c",        "win32-desktop" ),
         ( "video/out/win_state.c"),
         ( "video/out/x11_common.c",              "x11" ),
+        ( "video/repack.c" ),
         ( "video/sws_utils.c" ),
         ( "video/zimg.c",                        "zimg" ),
         ( "video/vaapi.c",                       "vaapi" ),
@@ -543,7 +535,6 @@ def build(ctx):
         ( timer_c ),
         ( "osdep/polldev.c",                     "posix" ),
 
-        ( "osdep/android/posix-spawn.c",         "android"),
         ( "osdep/android/strnlen.c",             "android"),
         ( "osdep/glob-win.c",                    "glob-win32" ),
         ( "osdep/macosx_application.m",          "cocoa" ),
@@ -589,7 +580,7 @@ def build(ctx):
                 ctx.path.find_node('osdep/mpv.rc'),
                 ctx.path.find_node(node))
 
-        version = ctx.bldnode.find_node('version.h')
+        version = ctx.bldnode.find_node('generated/version.h')
         if version:
             ctx.add_manual_dependency(
                 ctx.path.find_node('osdep/mpv.rc'),
@@ -745,7 +736,7 @@ def build(ctx):
 
         ctx.install_files(ctx.env.CONFDIR, ['etc/encoding-profiles.conf'] )
 
-        for size in '16x16 32x32 64x64'.split():
+        for size in '16x16 32x32 64x64 128x128'.split():
             ctx.install_as(
                 ctx.env.DATADIR + '/icons/hicolor/' + size + '/apps/mpv.png',
                 'etc/mpv-icon-8bit-' + size + '.png')

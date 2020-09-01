@@ -45,6 +45,12 @@
 #include "core.h"
 #include "command.h"
 
+const int num_ptracks[STREAM_TYPE_COUNT] = {
+    [STREAM_VIDEO] = 1,
+    [STREAM_AUDIO] = 1,
+    [STREAM_SUB] = 2,
+};
+
 double rel_time_to_abs(struct MPContext *mpctx, struct m_rel_time t)
 {
     double length = get_time_length(mpctx);
@@ -306,7 +312,6 @@ const char *mp_status_str(enum playback_status st)
 {
     switch (st) {
     case STATUS_SYNCING:    return "syncing";
-    case STATUS_FILLING:    return "filling";
     case STATUS_READY:      return "ready";
     case STATUS_PLAYING:    return "playing";
     case STATUS_DRAINING:   return "draining";

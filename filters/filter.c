@@ -74,6 +74,9 @@ struct filter_runner {
     // If we're currently running the filter graph (for avoiding recursion).
     bool filtering;
 
+    // If set, recursive filtering was initiated through this pin.
+    struct mp_pin *recursive;
+
     // Set of filters which need process() to be called. A filter is in this
     // array iff mp_filter_internal.pending==true.
     struct mp_filter **pending;
@@ -107,12 +110,12 @@ struct mp_filter_internal {
     struct mp_filter *error_handler;
 
     char *name;
+    bool high_priority;
 
     bool pending;
     bool async_pending;
     bool failed;
 };
-
 
 // Called when new work needs to be done on a pin belonging to the filter:
 //  - new data was requested
@@ -130,11 +133,26 @@ static void add_pending(struct mp_filter *f)
     // This should probably really be some sort of priority queue, but for now
     // something naive and dumb does the job too.
     f->in->pending = true;
-    MP_TARRAY_APPEND(r, r->pending, r->num_pending, f);
+    if (f->in->high_priority) {
+        MP_TARRAY_INSERT_AT(r, r->pending, r->num_pending, 0, f);
+    } else {
+        MP_TARRAY_APPEND(r, r->pending, r->num_pending, f);
+    }
+}
+
+static void add_pending_pin(struct mp_pin *p)
+{
+    struct mp_filter *f = p->manual_connection;
+    assert(f);
+
+    if (f->in->pending)
+        return;
+
+    add_pending(f);
 
     // Need to tell user that something changed.
-    if (f == r->root_filter)
-        r->external_pending = true;
+    if (f == f->in->runner->root_filter && p != f->in->runner->recursive)
+        f->in->runner->external_pending = true;
 }
 
 // Possibly enter recursive filtering. This is done as convenience for
@@ -143,8 +161,9 @@ static void add_pending(struct mp_filter *f)
 // stacks.) If the API users uses an external manually connected pin, do
 // recursive filtering as a not strictly necessary feature which makes outside
 // I/O with filters easier.
-static void filter_recursive(struct mp_filter *f)
+static void filter_recursive(struct mp_pin *p)
 {
+    struct mp_filter *f = p->conn->manual_connection;
     assert(f);
     struct filter_runner *r = f->in->runner;
 
@@ -152,9 +171,15 @@ static void filter_recursive(struct mp_filter *f)
     if (r->filtering)
         return;
 
+    assert(!r->recursive);
+    r->recursive = p;
+
     // Also don't lose the pending state, which the user may or may not
     // care about.
     r->external_pending |= mp_filter_graph_run(r->root_filter);
+
+    assert(r->recursive == p);
+    r->recursive = NULL;
 }
 
 void mp_filter_internal_mark_progress(struct mp_filter *f)
@@ -194,9 +219,9 @@ bool mp_filter_graph_run(struct mp_filter *filter)
 
     r->filtering = true;
 
-    // Note: some filters may call mp_filter_wakeup() from process on themselves
-    //       to queue a wakeup again later. So do not call this in the loop.
     flush_async_notifications(r);
+
+    bool exit_req = false;
 
     while (1) {
         if (atomic_exchange_explicit(&r->interrupt_flag, false,
@@ -207,16 +232,29 @@ bool mp_filter_graph_run(struct mp_filter *filter)
                 r->wakeup_cb(r->wakeup_ctx);
             r->async_wakeup_sent = true;
             pthread_mutex_unlock(&r->async_lock);
-            break;
+            exit_req = true;
         }
 
-        if (!r->num_pending)
+        if (!r->num_pending) {
+            flush_async_notifications(r);
+            if (!r->num_pending)
+                break;
+        }
+
+        struct mp_filter *next = NULL;
+
+        if (r->pending[0]->in->high_priority) {
+            next = r->pending[0];
+            MP_TARRAY_REMOVE_AT(r->pending, r->num_pending, 0);
+        } else if (!exit_req) {
+            next = r->pending[r->num_pending - 1];
+            r->num_pending -= 1;
+        }
+
+        if (!next)
             break;
 
-        struct mp_filter *next = r->pending[r->num_pending - 1];
-        r->num_pending -= 1;
         next->in->pending = false;
-
         if (next->in->info->process)
             next->in->info->process(next);
 
@@ -262,8 +300,8 @@ bool mp_pin_in_write(struct mp_pin *p, struct mp_frame frame)
     assert(p->conn->data.type == MP_FRAME_NONE);
     p->conn->data = frame;
     p->conn->data_requested = false;
-    add_pending(p->conn->manual_connection);
-    filter_recursive(p->conn->manual_connection);
+    add_pending_pin(p->conn);
+    filter_recursive(p);
     return true;
 }
 
@@ -281,9 +319,9 @@ bool mp_pin_out_request_data(struct mp_pin *p)
     if (p->conn && p->conn->manual_connection) {
         if (!p->data_requested) {
             p->data_requested = true;
-            add_pending(p->conn->manual_connection);
+            add_pending_pin(p->conn);
         }
-        filter_recursive(p->conn->manual_connection);
+        filter_recursive(p);
     }
     return mp_pin_out_has_data(p);
 }
@@ -291,7 +329,7 @@ bool mp_pin_out_request_data(struct mp_pin *p)
 void mp_pin_out_request_data_next(struct mp_pin *p)
 {
     if (mp_pin_out_request_data(p))
-        add_pending(p->conn->manual_connection);
+        add_pending_pin(p->conn);
 }
 
 struct mp_frame mp_pin_out_read(struct mp_pin *p)
@@ -488,6 +526,16 @@ enum mp_pin_dir mp_pin_get_dir(struct mp_pin *p)
 const char *mp_filter_get_name(struct mp_filter *f)
 {
     return f->in->name;
+}
+
+const struct mp_filter_info *mp_filter_get_info(struct mp_filter *f)
+{
+    return f->in->info;
+}
+
+void mp_filter_set_high_priority(struct mp_filter *f, bool pri)
+{
+    f->in->high_priority = pri;
 }
 
 void mp_filter_set_name(struct mp_filter *f, const char *name)

@@ -23,7 +23,6 @@
 #include "audio/format.h"
 #include "osdep/timer.h"
 #include "options/m_option.h"
-#include "misc/ring.h"
 #include "common/msg.h"
 #include "ao_coreaudio_chmap.h"
 #include "ao_coreaudio_properties.h"
@@ -417,7 +416,7 @@ const struct ao_driver audio_out_coreaudio = {
     .init           = init,
     .control        = control,
     .reset          = stop,
-    .resume         = start,
+    .start          = start,
     .hotplug_init   = hotplug_init,
     .hotplug_uninit = hotplug_uninit,
     .list_devs      = ca_get_device_list,

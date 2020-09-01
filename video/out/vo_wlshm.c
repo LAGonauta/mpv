@@ -112,8 +112,7 @@ static struct buffer *buffer_create(struct vo *vo, int width, int height)
     buf->vo = vo;
     buf->size = size;
     mp_image_set_params(&buf->mpi, &p->sws->dst);
-    buf->mpi.w = width;
-    buf->mpi.h = height;
+    mp_image_set_size(&buf->mpi, width, height);
     buf->mpi.planes[0] = data;
     buf->mpi.stride[0] = stride;
     buf->pool = wl_shm_create_pool(wl->shm, fd, size);
@@ -195,7 +194,10 @@ static int resize(struct vo *vo)
         p->free_buffers = buf->next;
         talloc_free(buf);
     }
-    return mp_sws_reinit(p->sws);
+    int ret = mp_sws_reinit(p->sws);
+    if (!wl->vo_opts->fullscreen && !wl->vo_opts->window_maximized)
+        wl_surface_commit(wl->surface);
+    return ret;
 }
 
 static int control(struct vo *vo, uint32_t request, void *data)

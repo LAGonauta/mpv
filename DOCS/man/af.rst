@@ -161,6 +161,28 @@ Available filters are:
             Would play media at 1.2x normal speed, with audio at normal pitch.
             Changing playback speed would change pitch, leaving audio tempo at
             1.2x.
+    
+``scaletempo2[=option1:option2:...]``
+    Scales audio tempo without altering pitch.
+    The algorithm is ported from chromium and uses the 
+    Waveform Similarity Overlap-and-add (WSOLA) method.
+    It seems to achieve a higher audio quality than scaletempo and rubberband.
+
+    By default, the ``search-interval`` and ``window-size`` parameters 
+    have the same values as in chromium.
+
+    ``min-speed=<speed>``
+        Mute audio if the playback speed is below ``<speed>``. (default: 0.25)
+
+    ``max-speed=<speed>``
+        Mute audio if the playback speed is above ``<speed>``
+        and ``<speed> != 0``. (default: 4.0)
+
+    ``search-interval=<amount>``
+        Length in milliseconds to search for best overlap position. (default: 30)
+    
+    ``window-size=<amount>``
+        Length in milliseconds of the overlap-and-add window. (default: 20)
 
 ``rubberband``
     High quality pitch correction with librubberband. This can be used in place
@@ -220,3 +242,10 @@ Available filters are:
         broken filters. In practice, these broken filters will either cause slow
         A/V desync over time (with some files), or break playback completely if
         you seek or start playback from the middle of a file.
+
+``drop``
+    This filter drops or repeats audio frames to adapt to playback speed. It
+    always operates on full audio frames, because it was made to handle SPDIF
+    (compressed audio passthrough). This is used automatically if the
+    ``--video-sync=display-adrop`` option is used. Do not use this filter (or
+    the given option); they are extremely low quality.

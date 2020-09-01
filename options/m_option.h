@@ -98,6 +98,7 @@ struct m_geometry {
     bool xy_valid : 1, wh_valid : 1;
     bool w_per : 1, h_per : 1;
     bool x_sign : 1, y_sign : 1, x_per : 1, y_per : 1;
+    int ws; // workspace; valid if !=0
 };
 
 void m_geometry_apply(int *xpos, int *ypos, int *widw, int *widh,
@@ -372,7 +373,6 @@ struct m_option {
     // -/+INFINITY, the range can be extended to INFINITY. (This part is buggy
     // for "float".)
     // Preferably use M_RANGE() to set these fields.
-    // Some types will abuse the min or max field for unrelated things.
     double min, max;
 
     // Type dependent data (for all kinds of extended settings).
@@ -420,14 +420,21 @@ char *format_file_size(int64_t size);
 #define UPDATE_VO_RESIZE        (1 << 19) // --android-surface-size
 #define UPDATE_HWDEC            (1 << 20) // --hwdec
 #define UPDATE_DVB_PROG         (1 << 21) // some --dvbin-...
-#define UPDATE_OPT_LAST         (1 << 21)
+#define UPDATE_SUB_HARD         (1 << 22) // subtitle opts. that need full reinit
+#define UPDATE_OPT_LAST         (1 << 22)
 
 // All bits between _FIRST and _LAST (inclusive)
 #define UPDATE_OPTS_MASK \
     (((UPDATE_OPT_LAST << 1) - 1) & ~(unsigned)(UPDATE_OPT_FIRST - 1))
 
 // type_float/type_double: string "default" is parsed as NaN (and reverse)
-#define M_OPT_DEFAULT_NAN       (1 << 29)
+#define M_OPT_DEFAULT_NAN       (1 << 25)
+
+// type time: string "no" maps to MP_NOPTS_VALUE (if unset, NOPTS is rejected)
+#define M_OPT_ALLOW_NO          (1 << 26)
+
+// type channels: disallow "auto" (still accept ""), limit list to at most 1 item.
+#define M_OPT_CHANNELS_LIMITED  (1 << 27)
 
 // Like M_OPT_TYPE_OPTIONAL_PARAM.
 #define M_OPT_OPTIONAL_PARAM    (1 << 30)
@@ -652,8 +659,6 @@ extern const char m_option_path_separator;
 #define OPT_AUDIOFORMAT(field) \
     OPT_TYPED_FIELD(m_option_type_afmt, int, field)
 
-// If .min==1, then passing auto is disallowed, but "" is still accepted, and
-// limit channel list to 1 item.
 #define OPT_CHANNELS(field) \
     OPT_TYPED_FIELD(m_option_type_channels, struct m_channels, field)
 

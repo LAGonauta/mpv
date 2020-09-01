@@ -23,6 +23,7 @@ typedef struct mp_vo_opts {
     int screen_id;
     int fsscreen_id;
     char *winname;
+    char *appid;
     int x11_netwm;
     int x11_bypass_compositor;
     int native_keyrepeat;
@@ -31,6 +32,7 @@ typedef struct mp_vo_opts {
     float zoom;
     float pan_x, pan_y;
     float align_x, align_y;
+    float scale_x, scale_y;
     float margin_x[2];
     float margin_y[2];
     int unscaled;
@@ -71,6 +73,7 @@ struct mp_subtitle_opts {
     float sub_fps;
     float sub_speed;
     int forced_subs_only;
+    int forced_subs_only_current;
     int stretch_dvd_subs;
     int stretch_image_subs;
     int image_subs_video_res;
@@ -143,6 +146,7 @@ typedef struct MPOpts {
     char **lua_ytdl_raw_options;
     int lua_load_stats;
     int lua_load_console;
+    int lua_load_auto_profiles;
 
     int auto_load_scripts;
 
@@ -205,7 +209,7 @@ typedef struct MPOpts {
     int video_sync;
     double sync_max_video_change;
     double sync_max_audio_change;
-    double sync_audio_drop_size;
+    int sync_max_factor;
     int hr_seek;
     float hr_seek_demuxer_offset;
     int hr_seek_framedrop;
@@ -217,6 +221,7 @@ typedef struct MPOpts {
     int term_osd;
     int term_osd_bar;
     char *term_osd_bar_chars;
+    char *term_title;
     char *playing_msg;
     char *osd_playing_msg;
     char *status_msg;
@@ -248,6 +253,7 @@ typedef struct MPOpts {
     int stream_id[2][STREAM_TYPE_COUNT];
     char **stream_lang[STREAM_TYPE_COUNT];
     int stream_auto_sel;
+    int subs_with_matching_audio;
     int audio_display;
     char **display_tags;
 
@@ -319,6 +325,7 @@ typedef struct MPOpts {
     struct encode_opts *encode_opts;
 
     char *ipc_path;
+    char *ipc_client;
 
     int wingl_dwm_flush;
 
